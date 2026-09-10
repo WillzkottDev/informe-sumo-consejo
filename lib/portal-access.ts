@@ -95,6 +95,8 @@ export async function canAccessWard(member: typeof members.$inferSelect, wardId:
 export function portalErrorResponse(error: unknown) {
   if (error instanceof PortalError) return Response.json({ error: error.message }, { status: error.status });
   const message = error instanceof Error ? error.message : "Error inesperado";
+  console.error("Portal error:", error);
   const unavailable = message.includes("no such table") || message.includes("D1 binding");
-  return Response.json({ error: unavailable ? "El portal se está preparando. Intenta nuevamente en unos instantes." : "No fue posible completar la solicitud." }, { status: 500 });
+  return Response.json({ error: unavailable ? "El portal se está preparando. Intenta nuevamente en unos instantes." : `No fue posible completar la solicitud: ${message}` }, { status: 500 });
 }
+
