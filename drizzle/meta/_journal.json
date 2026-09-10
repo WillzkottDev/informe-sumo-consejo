@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1789067114863,
+      "tag": "0000_spotty_misty_knight",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1789067282874,
+      "tag": "0001_glamorous_darkhawk",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789067293580,
+      "tag": "0002_oval_lightspeed",
+      "breakpoints": true
+    }
+  ]
+}
