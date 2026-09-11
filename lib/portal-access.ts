@@ -1,11 +1,9 @@
-import { and, count, eq, gt, lt } from "drizzle-orm";
+import { and, eq, gt, lt } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { getDb } from "@/db";
 import { members, memberWards, sessions } from "@/db/schema";
 
 export const SESSION_COOKIE = "sc_session";
-export const INITIAL_USERNAME = "admin";
-export const INITIAL_PASSWORD = "SumoConsejo2026!";
 
 export class PortalError extends Error {
   constructor(message: string, public status = 400) { super(message); }
@@ -29,25 +27,7 @@ export async function hashPassword(password: string, salt = crypto.randomUUID())
 export async function loginWithCredentials(username: string, password: string) {
   const db = getDb();
   const normalizedUsername = username.trim().toLowerCase();
-  const [candidate] = await db.select().from(members).where(eq(members.username, normalizedUsername)).limit(1);
-  let member = candidate;
-
-  // First-run bootstrap: the known initial account is created only when the D1 is empty.
-  if (!member && normalizedUsername === INITIAL_USERNAME && password === INITIAL_PASSWORD) {
-    const [{ total }] = await db.select({ total: count() }).from(members);
-    if (total === 0) {
-      const credentials = await hashPassword(password);
-      const [created] = await db.insert(members).values({
-        email: "admin@sumoconsejo.local",
-        username: normalizedUsername,
-        passwordHash: credentials.hash,
-        passwordSalt: credentials.salt,
-        displayName: "Administrador de Estaca",
-        role: "admin",
-      }).returning();
-      member = created;
-    }
-  }
+  const [member] = await db.select().from(members).where(eq(members.username, normalizedUsername)).limit(1);
 
   if (!member || !member.active || !member.passwordHash || !member.passwordSalt) {
     throw new PortalError("Usuario o contraseña incorrectos.", 401);
@@ -99,4 +79,3 @@ export function portalErrorResponse(error: unknown) {
   const unavailable = message.includes("no such table") || message.includes("D1 binding");
   return Response.json({ error: unavailable ? "El portal se está preparando. Intenta nuevamente en unos instantes." : `No fue posible completar la solicitud: ${message}` }, { status: 500 });
 }
-
