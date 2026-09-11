@@ -70,7 +70,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Toaster } from "@/components/ui/sonner";
 
 type Ward = { id: number; name: string; active: boolean; createdAt: string };
-type OrganizationScope = "primary" | "young_women" | "young_men" | "jas" | "single_adults" | "temple_family_history" | "missionary_work" | "self_reliance" | "seminary";
+type OrganizationScope = "primary" | "young_women" | "young_men" | "jas" | "single_adults" | "temple_family_history" | "missionary_work" | "self_reliance" | "seminary" | "sunday_school";
 type ReportScope = "high_council" | OrganizationScope;
 type Member = {
   id: number;
@@ -202,6 +202,7 @@ const organizationLabels: Record<ReportScope, string> = {
   missionary_work: "Obra Misional",
   self_reliance: "Autosuficiencia",
   seminary: "Seminario",
+  sunday_school: "Escuela Dominical",
 };
 
 function dateTime(value: string | null) {
@@ -492,10 +493,10 @@ export function PortalClient() {
       <aside className={`portal-sidebar ${mobileNav ? "is-open" : ""}`}>
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">
-            <span>SC</span>
+            <span>EÑ</span>
           </div>
           <div>
-            <strong>Sumo Consejo</strong>
+            <strong>Estaca Ñuñoa</strong>
             <span>Seguimiento de Estaca</span>
           </div>
           <Button
@@ -624,7 +625,7 @@ export function PortalClient() {
 function PortalLoading() {
   return (
     <div className="portal-loading">
-      <div className="brand-mark"><span>SC</span></div>
+      <div className="brand-mark"><span>EÑ</span></div>
       <div className="loading-line" />
       <p>Preparando el resumen mensual…</p>
     </div>
@@ -649,7 +650,7 @@ function LoginScreen({ busy, onLogin }: { busy: boolean; onLogin: (username: str
       <form className="access-card login-card" onSubmit={submit}>
         <div className="access-icon"><LockKeyhole /></div>
         <span className="access-eyebrow">Portal privado</span>
-        <h1>Informes Sumo Consejo</h1>
+        <h1>Informes Estaca Ñuñoa</h1>
         <p>Ingresa con tu usuario asignado para registrar el informe de tu barrio o revisar el consolidado de Estaca.</p>
         <div className="dialog-field login-field"><label htmlFor="login-username">Usuario</label><Input id="login-username" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Tu usuario" autoFocus /></div>
         <div className="dialog-field login-field"><label htmlFor="login-password">Contraseña</label><Input id="login-password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Tu contraseña" /></div>
@@ -1363,7 +1364,7 @@ function AdminView({ data, monthStart, refresh, post }: { data: PortalData; mont
             <div className="dialog-field"><label htmlFor="member-username">Usuario</label><Input id="member-username" value={memberForm.username} onChange={(event) => setMemberForm((previous) => ({ ...previous, username: event.target.value }))} placeholder="ej.: juan.perez" /></div>
             <div className="dialog-field"><label htmlFor="member-password">{editingMember ? "Nueva contraseña (opcional)" : "Contraseña"}</label><Input id="member-password" type="password" value={memberForm.password} onChange={(event) => setMemberForm((previous) => ({ ...previous, password: event.target.value }))} placeholder={editingMember ? "Dejar en blanco para mantenerla" : "Mínimo 8 caracteres"} /></div>
             <div className="dialog-field"><label>Nivel de acceso</label><Select value={memberForm.role} onValueChange={(role) => setMemberForm((previous) => ({ ...previous, role: role as "admin" | "leader" }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="leader">Usuario informante</SelectItem><SelectItem value="admin">Administración Estaca</SelectItem></SelectContent></Select></div>
-            {memberForm.role !== "admin" && <div className="dialog-field"><label>Perfil de informe</label><Select value={memberForm.reportScope} onValueChange={(reportScope) => setMemberForm((previous) => ({ ...previous, reportScope: reportScope as ReportScope }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="high_council">Sumo Consejo asignado</SelectItem><SelectItem value="primary">Organización · Primaria</SelectItem><SelectItem value="young_women">Organización · Mujeres Jóvenes</SelectItem><SelectItem value="young_men">Organización · Hombres Jóvenes</SelectItem><SelectItem value="jas">Organización · JAS</SelectItem><SelectItem value="single_adults">Organización · AS</SelectItem><SelectItem value="temple_family_history">Organización · Templo e Historia Familiar</SelectItem><SelectItem value="missionary_work">Organización · Obra Misional</SelectItem><SelectItem value="self_reliance">Organización · Autosuficiencia</SelectItem><SelectItem value="seminary">Organización · Seminario</SelectItem></SelectContent></Select></div>}
+            {memberForm.role !== "admin" && <div className="dialog-field"><label>Perfil de informe</label><Select value={memberForm.reportScope} onValueChange={(reportScope) => setMemberForm((previous) => ({ ...previous, reportScope: reportScope as ReportScope }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="high_council">Sumo Consejo asignado</SelectItem><SelectItem value="primary">Organización · Primaria</SelectItem><SelectItem value="young_women">Organización · Mujeres Jóvenes</SelectItem><SelectItem value="young_men">Organización · Hombres Jóvenes</SelectItem><SelectItem value="sunday_school">Organización · Escuela Dominical</SelectItem><SelectItem value="jas">Organización · JAS</SelectItem><SelectItem value="single_adults">Organización · AS</SelectItem><SelectItem value="temple_family_history">Organización · Templo e Historia Familiar</SelectItem><SelectItem value="missionary_work">Organización · Obra Misional</SelectItem><SelectItem value="self_reliance">Organización · Autosuficiencia</SelectItem><SelectItem value="seminary">Organización · Seminario</SelectItem></SelectContent></Select></div>}
             {memberForm.role !== "admin" && <div className="dialog-field assignment-field"><label>Barrios asignados para consultar información</label>{data.wards.length ? <div className="assignment-list">{data.wards.map((ward) => <label key={ward.id}><Checkbox checked={memberForm.wardIds.includes(ward.id)} onCheckedChange={(checked) => setMemberForm((previous) => ({ ...previous, wardIds: checked ? [...previous.wardIds, ward.id] : previous.wardIds.filter((id) => id !== ward.id) }))} /> {ward.name}</label>)}</div> : <span className="field-help">Primero debes crear al menos un barrio.</span>}</div>}
             {editingMember && <label className="active-check"><Checkbox checked={memberForm.active} onCheckedChange={(checked) => setMemberForm((previous) => ({ ...previous, active: checked === true }))} /> Acceso activo</label>}
           </div>

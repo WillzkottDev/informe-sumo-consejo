@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Informes Sumo Consejo",
+  title: "Informes Estaca Ñuñoa",
   description: "Seguimiento mensual de barrios y consolidado de Estaca.",
   icons: {
     icon: "/favicon.svg",

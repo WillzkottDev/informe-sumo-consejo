@@ -259,7 +259,7 @@ export async function POST(request: Request) {
     if (action === "save_organization_report") {
       const wardId = numericId(payload.wardId, "El barrio");
       const monthStart = validateMonth(payload.monthStart);
-      const validOrganizations = new Set(["primary", "young_women", "young_men", "jas", "single_adults", "temple_family_history", "missionary_work", "self_reliance", "seminary"]);
+      const validOrganizations = new Set(["primary", "young_women", "young_men", "jas", "single_adults", "temple_family_history", "missionary_work", "self_reliance", "seminary", "sunday_school"]);
       const requestedOrganization = cleanText(payload.organization, 30);
       const organization = member.role === "admin" ? requestedOrganization : member.reportScope;
       if (!validOrganizations.has(organization)) throw new PortalError("La organización no es válida.");
@@ -321,7 +321,7 @@ export async function POST(request: Request) {
       const password = typeof payload.password === "string" ? payload.password : "";
       const displayName = cleanText(payload.displayName, 100);
       const role = payload.role === "admin" ? "admin" : "leader";
-      const validScopes = new Set(["high_council", "primary", "young_women", "young_men", "jas", "single_adults", "temple_family_history", "missionary_work", "self_reliance", "seminary"]);
+      const validScopes = new Set(["high_council", "primary", "young_women", "young_men", "jas", "single_adults", "temple_family_history", "missionary_work", "self_reliance", "seminary", "sunday_school"]);
       const requestedScope = cleanText(payload.reportScope, 30);
       const reportScope = role === "admin" ? "high_council" : validScopes.has(requestedScope) ? requestedScope : "high_council";
       const active = payload.active !== false;
