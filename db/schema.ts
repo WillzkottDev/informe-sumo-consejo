@@ -19,6 +19,7 @@ export const members = sqliteTable(
     passwordSalt: text("password_salt").notNull().default(""),
     displayName: text("display_name").notNull(),
     role: text("role").notNull().default("leader"),
+    reportScope: text("report_scope").notNull().default("high_council"),
     active: integer("active", { mode: "boolean" }).notNull().default(true),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
@@ -86,6 +87,29 @@ export const reports = sqliteTable(
     uniqueIndex("idx_reports_ward_week").on(table.wardId, table.weekStart),
     index("idx_reports_week_status").on(table.weekStart, table.status),
     index("idx_reports_reporter").on(table.reporterMemberId),
+  ],
+);
+
+export const organizationReports = sqliteTable(
+  "organization_reports",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    wardId: integer("ward_id").notNull().references(() => wards.id, { onDelete: "cascade" }),
+    monthStart: text("month_start").notNull(),
+    organization: text("organization").notNull(),
+    observation: text("observation").notNull().default(""),
+    approvalStatus: text("approval_status").notNull().default("pending"),
+    approvedAt: text("approved_at"),
+    approvedByMemberId: integer("approved_by_member_id").references(() => members.id),
+    reporterMemberId: integer("reporter_member_id").references(() => members.id),
+    reporterName: text("reporter_name").notNull().default(""),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_org_reports_ward_month_org").on(table.wardId, table.monthStart, table.organization),
+    index("idx_org_reports_month").on(table.monthStart),
+    index("idx_org_reports_approval").on(table.approvalStatus, table.wardId),
   ],
 );
 

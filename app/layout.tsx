@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Informes Sumo Consejo",
-  description: "Seguimiento semanal de barrios y consolidado de Estaca.",
+  description: "Seguimiento mensual de barrios y consolidado de Estaca.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

@@ -1,6 +1,6 @@
 import { asc, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
-import { members, memberWards, reports, wards } from "@/db/schema";
+import { members, memberWards, organizationReports, reports, wards } from "@/db/schema";
 import {
   canAccessWard,
   hashPassword,
@@ -29,16 +29,16 @@ function numericId(value: unknown, label: string) {
   return parsed;
 }
 
-function validateWeek(value: unknown) {
-  const week = cleanText(value, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(week)) {
-    throw new PortalError("La semana seleccionada no es válida.");
+function validateMonth(value: unknown) {
+  const month = cleanText(value, 10);
+  if (!/^\d{4}-\d{2}-01$/.test(month)) {
+    throw new PortalError("El mes seleccionado no es válido.");
   }
-  const parsed = new Date(`${week}T00:00:00Z`);
-  if (Number.isNaN(parsed.getTime()) || parsed.getUTCDay() !== 1) {
-    throw new PortalError("La semana debe comenzar un lunes.");
+  const parsed = new Date(`${month}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new PortalError("El mes seleccionado no es válido.");
   }
-  return week;
+  return month;
 }
 
 export async function GET() {
@@ -47,7 +47,7 @@ export async function GET() {
     const db = getDb();
 
     const visibleWards =
-      member.role === "admin"
+      member.role === "admin" || member.reportScope !== "high_council"
         ? await db.select().from(wards).where(eq(wards.active, true)).orderBy(asc(wards.name))
         : await db
             .select({
@@ -62,7 +62,12 @@ export async function GET() {
             .orderBy(asc(wards.name));
 
     const wardIds = visibleWards.map((ward) => ward.id);
-    const reportRows = wardIds.length
+    const currentAssignmentRows = member.role === "admin"
+      ? []
+      : await db.select({ wardId: memberWards.wardId }).from(memberWards).where(eq(memberWards.memberId, member.id));
+    const assignedWardIds = currentAssignmentRows.map((row) => row.wardId);
+    const readableWardIds = member.role === "admin" || member.reportScope === "high_council" ? wardIds : assignedWardIds;
+    const reportRows = readableWardIds.length
       ? await db
           .select({
             id: reports.id,
@@ -86,10 +91,34 @@ export async function GET() {
           })
           .from(reports)
           .innerJoin(wards, eq(reports.wardId, wards.id))
-          .where(inArray(reports.wardId, wardIds))
+          .where(inArray(reports.wardId, readableWardIds))
           .orderBy(desc(reports.weekStart), asc(wards.name))
           .limit(600)
       : [];
+    const organizationRowsRaw = wardIds.length
+      ? await db
+          .select({
+            id: organizationReports.id,
+            wardId: organizationReports.wardId,
+            wardName: wards.name,
+            monthStart: organizationReports.monthStart,
+            organization: organizationReports.organization,
+            observation: organizationReports.observation,
+            approvalStatus: organizationReports.approvalStatus,
+            approvedAt: organizationReports.approvedAt,
+            reporterMemberId: organizationReports.reporterMemberId,
+            reporterName: organizationReports.reporterName,
+            updatedAt: organizationReports.updatedAt,
+          })
+          .from(organizationReports)
+          .innerJoin(wards, eq(organizationReports.wardId, wards.id))
+          .where(inArray(organizationReports.wardId, wardIds))
+          .orderBy(desc(organizationReports.monthStart), asc(wards.name))
+          .limit(1000)
+      : [];
+    const organizationRows = member.role === "admin"
+      ? organizationRowsRaw
+      : organizationRowsRaw.filter((row) => row.reporterMemberId === member.id || (row.approvalStatus === "approved" && assignedWardIds.includes(row.wardId)));
 
     const memberRows =
       member.role === "admin"
@@ -100,6 +129,7 @@ export async function GET() {
               username: members.username,
               displayName: members.displayName,
               role: members.role,
+              reportScope: members.reportScope,
               active: members.active,
               connected: members.authUserId,
             })
@@ -115,12 +145,15 @@ export async function GET() {
         email: member.email,
         displayName: member.displayName,
         role: member.role,
+        reportScope: member.reportScope,
         username: member.username,
       },
       wards: visibleWards,
       reports: reportRows,
+      organizationReports: organizationRows,
       members: memberRows.map((row) => ({ ...row, connected: Boolean(row.connected) })),
       assignments: assignmentRows,
+      currentAssignmentWardIds: member.role === "admin" ? wardIds : assignedWardIds,
     });
   } catch (error) {
     return portalErrorResponse(error);
@@ -172,14 +205,14 @@ export async function POST(request: Request) {
       if (!(await canAccessWard(member, wardId))) {
         throw new PortalError("No tienes acceso a este barrio.", 403);
       }
-      const weekStart = validateWeek(payload.weekStart);
+      const weekStart = validateMonth(payload.weekStart);
       const status = payload.status === "submitted" ? "submitted" : "draft";
       const punctualityState = cleanText(payload.punctualityState, 30);
       const followupState = cleanText(payload.followupState, 30);
       const scheduleState = cleanText(payload.scheduleState, 30);
-      const punctualityNote = cleanText(payload.punctualityNote);
-      const followupNote = cleanText(payload.followupNote);
-      const scheduleNote = cleanText(payload.scheduleNote);
+      const punctualityNote = "";
+      const followupNote = "";
+      const scheduleNote = "";
 
       if (status === "submitted") {
         if (
@@ -188,15 +221,6 @@ export async function POST(request: Request) {
           !VALID_STATES.has(scheduleState)
         ) {
           throw new PortalError("Completa los tres puntos de atención obligatorios.");
-        }
-        if (
-          (punctualityState === "requiere_atencion" && !punctualityNote) ||
-          (followupState === "requiere_atencion" && !followupNote) ||
-          (scheduleState === "requiere_atencion" && !scheduleNote)
-        ) {
-          throw new PortalError(
-            "Agrega un comentario en cada punto marcado como requiere atención.",
-          );
         }
       }
 
@@ -232,6 +256,53 @@ export async function POST(request: Request) {
       return Response.json({ report: saved });
     }
 
+    if (action === "save_organization_report") {
+      const wardId = numericId(payload.wardId, "El barrio");
+      const monthStart = validateMonth(payload.monthStart);
+      const validOrganizations = new Set(["primary", "young_women", "young_men", "jas", "single_adults", "temple_family_history", "missionary_work", "self_reliance", "seminary"]);
+      const requestedOrganization = cleanText(payload.organization, 30);
+      const organization = member.role === "admin" ? requestedOrganization : member.reportScope;
+      if (!validOrganizations.has(organization)) throw new PortalError("La organización no es válida.");
+      if (!(await canAccessWard(member, wardId)) && member.role !== "admin" && member.reportScope === "high_council") {
+        throw new PortalError("No tienes acceso a este barrio.", 403);
+      }
+      const now = new Date().toISOString();
+      const values = {
+        wardId,
+        monthStart,
+        organization,
+        observation: cleanText(payload.observation),
+        reporterMemberId: member.id,
+        reporterName: member.displayName,
+        approvalStatus: member.role === "admin" ? "approved" : "pending",
+        approvedAt: member.role === "admin" ? now : null,
+        approvedByMemberId: member.role === "admin" ? member.id : null,
+        updatedAt: now,
+      };
+      const [saved] = await db.insert(organizationReports).values(values).onConflictDoUpdate({
+        target: [organizationReports.wardId, organizationReports.monthStart, organizationReports.organization],
+        set: values,
+      }).returning();
+      return Response.json({ organizationReport: saved });
+    }
+
+    if (action === "review_organization_report") {
+      requireAdmin(member);
+      const reportId = numericId(payload.reportId, "El informe");
+      const approvalStatus = payload.approvalStatus === "approved" ? "approved" : "pending";
+      const observation = cleanText(payload.observation);
+      const now = new Date().toISOString();
+      const [saved] = await db.update(organizationReports).set({
+        observation,
+        approvalStatus,
+        approvedAt: approvalStatus === "approved" ? now : null,
+        approvedByMemberId: approvalStatus === "approved" ? member.id : null,
+        updatedAt: now,
+      }).where(eq(organizationReports.id, reportId)).returning();
+      if (!saved) throw new PortalError("El informe ya no existe.", 404);
+      return Response.json({ organizationReport: saved });
+    }
+
     if (action === "create_ward") {
       requireAdmin(member);
       const name = cleanText(payload.name, 80);
@@ -250,6 +321,9 @@ export async function POST(request: Request) {
       const password = typeof payload.password === "string" ? payload.password : "";
       const displayName = cleanText(payload.displayName, 100);
       const role = payload.role === "admin" ? "admin" : "leader";
+      const validScopes = new Set(["high_council", "primary", "young_women", "young_men", "jas", "single_adults", "temple_family_history", "missionary_work", "self_reliance", "seminary"]);
+      const requestedScope = cleanText(payload.reportScope, 30);
+      const reportScope = role === "admin" ? "high_council" : validScopes.has(requestedScope) ? requestedScope : "high_council";
       const active = payload.active !== false;
       if (!/^\S+@\S+\.\S+$/.test(email)) {
         throw new PortalError("Ingresa un correo válido.");
@@ -274,7 +348,7 @@ export async function POST(request: Request) {
         const [updated] = await db
           .update(members)
           .set({
-            email, username, displayName, role, active, updatedAt: new Date().toISOString(),
+            email, username, displayName, role, reportScope, active, updatedAt: new Date().toISOString(),
             ...(credentials ? { passwordHash: credentials.hash, passwordSalt: credentials.salt } : {}),
           })
           .where(eq(members.id, memberId))
@@ -293,7 +367,7 @@ export async function POST(request: Request) {
         const credentials = await hashPassword(password);
         const [created] = await db
           .insert(members)
-          .values({ email, username, passwordHash: credentials.hash, passwordSalt: credentials.salt, displayName, role, active })
+          .values({ email, username, passwordHash: credentials.hash, passwordSalt: credentials.salt, displayName, role, reportScope, active })
           .returning();
         savedMember = created;
       }
