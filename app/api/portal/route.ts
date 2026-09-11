@@ -66,7 +66,7 @@ export async function GET() {
       ? []
       : await db.select({ wardId: memberWards.wardId }).from(memberWards).where(eq(memberWards.memberId, member.id));
     const assignedWardIds = currentAssignmentRows.map((row) => row.wardId);
-    const readableWardIds = member.role === "admin" || member.reportScope === "high_council" ? wardIds : assignedWardIds;
+    const readableWardIds = member.role === "admin" || member.reportScope === "high_council" ? wardIds : [];
     const reportRows = readableWardIds.length
       ? await db
           .select({
@@ -118,7 +118,9 @@ export async function GET() {
       : [];
     const organizationRows = member.role === "admin"
       ? organizationRowsRaw
-      : organizationRowsRaw.filter((row) => row.reporterMemberId === member.id || (row.approvalStatus === "approved" && assignedWardIds.includes(row.wardId)));
+      : member.reportScope === "high_council"
+        ? organizationRowsRaw.filter((row) => row.approvalStatus === "approved" && assignedWardIds.includes(row.wardId))
+        : organizationRowsRaw.filter((row) => row.organization === member.reportScope && (row.reporterMemberId === member.id || (row.approvalStatus === "approved" && assignedWardIds.includes(row.wardId))));
 
     const memberRows =
       member.role === "admin"

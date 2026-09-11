@@ -206,6 +206,12 @@ const organizationLabels: Record<ReportScope, string> = {
   sunday_school: "Escuela Dominical",
 };
 
+const TEXT_LIMIT = 5000;
+
+function CharacterCount({ value }: { value: string }) {
+  return <span className="character-count" aria-live="polite">{value.length.toLocaleString("es-CL")} / {TEXT_LIMIT.toLocaleString("es-CL")}</span>;
+}
+
 function dateTime(value: string | null) {
   if (!value) return "-";
   return new Intl.DateTimeFormat("es-CL", {
@@ -465,7 +471,7 @@ export function PortalClient() {
       ? [{ value: "stake", label: "Resumen Estaca", icon: LayoutDashboard }]
       : []),
     { value: "report", label: data.currentMember.reportScope === "high_council" ? "Informe mensual" : "Informe de organización", icon: FilePenLine },
-    ...(!isAdmin ? [{ value: "shared", label: "Información aprobada", icon: BookOpenCheck }] : []),
+    { value: "shared", label: "Consulta de informes", icon: BookOpenCheck },
     { value: "history", label: "Historial", icon: FileClock },
     ...(isAdmin
       ? [{ value: "admin", label: "Administración", icon: Settings2 }]
@@ -476,7 +482,7 @@ export function PortalClient() {
     stake: { eyebrow: "Vista Estaca", title: "Resumen mensual" },
     report: { eyebrow: "Asignación de barrio", title: data.currentMember.reportScope === "high_council" ? "Informe mensual" : organizationLabels[data.currentMember.reportScope] },
     history: { eyebrow: "Seguimiento", title: "Historial de informes" },
-    shared: { eyebrow: "Barrios asignados", title: "Información aprobada" },
+    shared: { eyebrow: isAdmin ? "Lectura integrada" : "Información autorizada", title: "Consulta por barrio" },
     admin: { eyebrow: "Configuración", title: "Barrios y accesos" },
   };
   const title = viewTitles[activeView] ?? viewTitles.report;
@@ -533,7 +539,7 @@ export function PortalClient() {
           <div className="profile-avatar">{initials(data.currentMember.displayName)}</div>
           <div>
             <strong>{data.currentMember.displayName}</strong>
-            <span>{isAdmin ? "Administración Estaca" : "Sumo Consejo"}</span>
+            <span>{isAdmin ? "Administración Estaca" : organizationLabels[data.currentMember.reportScope]}</span>
           </div>
           <Button variant="ghost" size="icon" aria-label="Cerrar sesión" onClick={() => void signOut()}><LogOut /></Button>
         </div>
@@ -601,7 +607,7 @@ export function PortalClient() {
           <TabsContent value="history">
             <HistoryView data={data} onOpenReport={openReport} />
           </TabsContent>
-          {!isAdmin && <TabsContent value="shared"><SharedInformationView data={data} monthStart={weekStart} /></TabsContent>}
+          <TabsContent value="shared"><SharedInformationView data={data} monthStart={weekStart} /></TabsContent>
           {isAdmin && (
             <TabsContent value="admin">
               <AdminView data={data} monthStart={weekStart} refresh={refresh} post={post} />
@@ -1050,7 +1056,8 @@ function ReportSection({
       <div className="section-main">
         <div className="section-heading"><div><h3>{title}</h3><p>{description}</p></div><Badge variant="outline">Opcional</Badge></div>
         <label className="field-label" htmlFor={`observation-${number}`}>Observaciones importantes</label>
-        <Textarea id={`observation-${number}`} value={observation} onChange={(event) => onObservation(event.target.value)} placeholder="Escribe solo si existe algo destacable o un punto de mejora…" rows={4} />
+        <Textarea id={`observation-${number}`} value={observation} maxLength={TEXT_LIMIT} onChange={(event) => onObservation(event.target.value)} placeholder="Escribe solo si existe algo destacable o un punto de mejora…" rows={4} />
+        <CharacterCount value={observation} />
       </div>
       <aside className="attention-note">
         <span className="attention-title">Puntos de atención</span>
@@ -1139,7 +1146,8 @@ function OrganizationReportView({
               </span>
             </div>
             <label htmlFor={`organization-${ward.id}`}>Observación del mes</label>
-            <Textarea id={`organization-${ward.id}`} value={drafts[ward.id] ?? ""} onChange={(event) => updateObservation(ward.id, event.target.value)} placeholder={`Escribe lo observado por ${organizationLabels[organization]} en ${ward.name}…`} rows={5} />
+            <Textarea id={`organization-${ward.id}`} value={drafts[ward.id] ?? ""} maxLength={TEXT_LIMIT} onChange={(event) => updateObservation(ward.id, event.target.value)} placeholder={`Escribe lo observado por ${organizationLabels[organization]} en ${ward.name}…`} rows={5} />
+            <CharacterCount value={drafts[ward.id] ?? ""} />
           </article>
           );
         })}
@@ -1149,19 +1157,41 @@ function OrganizationReportView({
 }
 
 function SharedInformationView({ data, monthStart }: { data: PortalData; monthStart: string }) {
-  const approved = data.organizationReports.filter((item) => item.monthStart === monthStart && item.approvalStatus === "approved" && data.currentAssignmentWardIds.includes(item.wardId));
+  const isAdmin = data.currentMember.role === "admin";
+  const isHighCouncil = data.currentMember.reportScope === "high_council";
+  const visibleWardIds = isAdmin ? data.wards.map((ward) => ward.id) : data.currentAssignmentWardIds;
+  const [wardFilter, setWardFilter] = useState("all");
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const organizationRows = data.organizationReports.filter((item) =>
+    item.monthStart === monthStart &&
+    visibleWardIds.includes(item.wardId) &&
+    (isAdmin || item.approvalStatus === "approved") &&
+    (sourceFilter === "all" || item.organization === sourceFilter),
+  );
+  const councilRows = (isAdmin || isHighCouncil) && (sourceFilter === "all" || sourceFilter === "high_council")
+    ? data.reports.filter((item) => item.weekStart === monthStart && visibleWardIds.includes(item.wardId))
+    : [];
+  const selectedWardIds = wardFilter === "all" ? visibleWardIds : visibleWardIds.filter((id) => id === Number(wardFilter));
+  const availableOrganizations = Array.from(new Set(data.organizationReports.map((item) => item.organization)));
   return (
     <div className="view-stack shared-view">
       <section className="history-heading">
-        <div><span className="section-kicker">Información revisada · {weekLabel(monthStart)}</span><h2>Informaciones de tus barrios</h2><p>Aquí aparecen únicamente aportes aprobados relacionados con tus barrios asignados.</p></div>
-        <Badge variant="outline"><ShieldCheck /> {approved.length} aprobadas</Badge>
+        <div><span className="section-kicker">Vista consolidada · {weekLabel(monthStart)}</span><h2>Informes por barrio</h2><p>{isAdmin ? "Consulta toda la información de la Estaca por barrio y origen." : isHighCouncil ? "Consulta los informes y aportes aprobados de tus barrios asignados." : `Consulta la información aprobada de ${organizationLabels[data.currentMember.reportScope]} en tus barrios asignados.`}</p></div>
+        <Badge variant="outline"><ShieldCheck /> {organizationRows.length + councilRows.length} registros</Badge>
       </section>
-      {data.currentAssignmentWardIds.length === 0 ? <section className="panel digest-empty"><Building2 /><p>Aún no tienes barrios asignados para consultar.</p></section> : (
+      <section className="panel report-browser-controls">
+        <div><label>Barrio</label><Select value={wardFilter} onValueChange={setWardFilter}><SelectTrigger><Building2 /><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todos los barrios</SelectItem>{visibleWardIds.map((wardId) => { const ward = data.wards.find((item) => item.id === wardId); return ward ? <SelectItem key={ward.id} value={String(ward.id)}>{ward.name}</SelectItem> : null; })}</SelectContent></Select></div>
+        {(isAdmin || isHighCouncil) && <div><label>Tipo de información</label><Select value={sourceFilter} onValueChange={setSourceFilter}><SelectTrigger><BookOpenCheck /><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Toda la información</SelectItem><SelectItem value="high_council">Sumo Consejo</SelectItem>{availableOrganizations.map((organization) => <SelectItem key={organization} value={organization}>{organizationLabels[organization]}</SelectItem>)}</SelectContent></Select></div>}
+      </section>
+      {visibleWardIds.length === 0 ? <section className="panel digest-empty"><Building2 /><p>Aún no tienes barrios asignados para consultar.</p></section> : (
         <section className="shared-information-grid">
-          {data.currentAssignmentWardIds.map((wardId) => {
+          {selectedWardIds.map((wardId) => {
             const ward = data.wards.find((item) => item.id === wardId);
-            const items = approved.filter((item) => item.wardId === wardId);
-            return <article className="panel shared-ward-card" key={wardId}><div className="admin-ward-title"><Building2 /><div><span>Barrio</span><h3>{ward?.name ?? "Barrio"}</h3></div></div>{items.length ? <div className="ward-comment-list">{items.map((item) => <div className="ward-comment organization" key={item.id}><strong>{organizationLabels[item.organization]}</strong><p>{item.observation}</p><small>{item.reporterName} · {dateTime(item.updatedAt)}</small></div>)}</div> : <p className="ward-summary-empty">No hay información aprobada para este mes.</p>}</article>;
+            const organizations = organizationRows.filter((item) => item.wardId === wardId);
+            const council = councilRows.find((item) => item.wardId === wardId);
+            const councilComments = council ? [["Reunión Sacramental", council.sacramentalObservation], ["Consejo de Barrio", council.wardCouncilObservation], ["Obra Misional y Templo", council.missionaryObservation], ["Otros enfoques", council.otherObservation]].filter(([, text]) => text) : [];
+            const hasContent = organizations.length > 0 || councilComments.length > 0;
+            return <article className="panel shared-ward-card" key={wardId}><div className="admin-ward-title"><Building2 /><div><span>Barrio</span><h3>{ward?.name ?? "Barrio"}</h3></div></div>{hasContent ? <div className="ward-comment-list">{councilComments.map(([label, text]) => <div className="ward-comment" key={label}><strong>Sumo Consejo · {label}</strong><p>{text}</p><small>{council?.reporterName} · {dateTime(council?.updatedAt ?? null)}</small></div>)}{organizations.map((item) => <div className="ward-comment organization" key={item.id}><strong>{organizationLabels[item.organization]}{isAdmin && item.approvalStatus !== "approved" ? " · Pendiente" : ""}</strong><p>{item.observation}</p><small>{item.reporterName} · {dateTime(item.updatedAt)}</small></div>)}</div> : <p className="ward-summary-empty">No hay información disponible para este mes y filtro.</p>}</article>;
           })}
         </section>
       )}
@@ -1172,11 +1202,13 @@ function SharedInformationView({ data, monthStart }: { data: PortalData; monthSt
 function HistoryView({ data, onOpenReport }: { data: PortalData; onOpenReport: (wardId: number, week: string) => void }) {
   const [wardFilter, setWardFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const showCouncilReports = data.currentMember.role === "admin" || data.currentMember.reportScope === "high_council";
   const filtered = data.reports.filter(
     (report) =>
       (wardFilter === "all" || report.wardId === Number(wardFilter)) &&
       (statusFilter === "all" || report.status === statusFilter),
   );
+  const organizationHistory = data.organizationReports.filter((report) => wardFilter === "all" || report.wardId === Number(wardFilter));
   return (
     <div className="view-stack">
       <section className="history-heading">
@@ -1186,13 +1218,13 @@ function HistoryView({ data, onOpenReport }: { data: PortalData; onOpenReport: (
             <SelectTrigger><Building2 /><SelectValue /></SelectTrigger>
             <SelectContent><SelectItem value="all">Todos los barrios</SelectItem>{data.wards.map((ward) => <SelectItem key={ward.id} value={String(ward.id)}>{ward.name}</SelectItem>)}</SelectContent>
           </Select>
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
+          {showCouncilReports && <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent><SelectItem value="all">Todos los estados</SelectItem><SelectItem value="submitted">Enviados</SelectItem><SelectItem value="draft">Borradores</SelectItem></SelectContent>
-          </Select>
+          </Select>}
         </div>
       </section>
-      <section className="panel table-panel">
+      {showCouncilReports && <section className="panel table-panel">
         {filtered.length ? (
           <Table>
             <TableHeader><TableRow><TableHead>Mes</TableHead><TableHead>Barrio</TableHead><TableHead>Estado</TableHead><TableHead>Puntos</TableHead><TableHead>Responsable</TableHead><TableHead className="text-right">Detalle</TableHead></TableRow></TableHeader>
@@ -1210,6 +1242,10 @@ function HistoryView({ data, onOpenReport }: { data: PortalData; onOpenReport: (
             </TableBody>
           </Table>
         ) : <div className="digest-empty"><FileClock /><p>No hay informes que coincidan con los filtros.</p></div>}
+      </section>}
+      <section className="panel organization-history-panel">
+        <div className="panel-heading"><div><span className="section-kicker">Organizaciones</span><h3>Historial de informaciones</h3></div><Badge variant="outline">{organizationHistory.length} registros</Badge></div>
+        {organizationHistory.length ? <div className="organization-history-list">{organizationHistory.map((item) => <article key={item.id}><div><strong>{organizationLabels[item.organization]}</strong><span>{item.wardName} · {weekLabel(item.monthStart)}</span></div><Badge variant={item.approvalStatus === "approved" ? "default" : "secondary"}>{item.approvalStatus === "approved" ? "Publicado" : "Pendiente"}</Badge><p>{item.observation || "Sin observación escrita."}</p><small>{item.reporterName} · {dateTime(item.updatedAt)}</small></article>)}</div> : <div className="mini-empty">No hay informaciones de organizaciones para este filtro.</div>}
       </section>
     </div>
   );
@@ -1250,19 +1286,24 @@ function AdminWardSummary({ data, monthStart }: { data: PortalData; monthStart: 
 function OrganizationReviewCard({ item, post, refresh }: { item: OrganizationReport; post: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>; refresh: () => Promise<void> }) {
   const [observation, setObservation] = useState(item.observation);
   const [busy, setBusy] = useState(false);
+  const [published, setPublished] = useState(false);
   const save = async (approvalStatus: "pending" | "approved") => {
     setBusy(true);
+    setPublished(false);
     try {
       await post({ action: "review_organization_report", reportId: item.id, observation, approvalStatus });
       toast.success(approvalStatus === "approved" ? "Información aprobada y publicada" : "Cambios guardados como pendientes");
+      setPublished(approvalStatus === "approved");
       await refresh();
     } catch (error) { toast.error(error instanceof Error ? error.message : "No fue posible revisar la información."); }
     finally { setBusy(false); }
   };
   return <article className={`review-card ${item.approvalStatus}`}>
     <div className="review-card-heading"><div><span>{item.wardName}</span><h4>{organizationLabels[item.organization]}</h4><small>{item.reporterName} · {dateTime(item.updatedAt)}</small></div><Badge variant={item.approvalStatus === "approved" ? "default" : "secondary"}>{item.approvalStatus === "approved" ? "Aprobado" : "Pendiente"}</Badge></div>
-    <Textarea value={observation} onChange={(event) => setObservation(event.target.value)} rows={4} aria-label={`Información de ${organizationLabels[item.organization]} para ${item.wardName}`} />
+    <Textarea value={observation} maxLength={TEXT_LIMIT} onChange={(event) => { setObservation(event.target.value); setPublished(false); }} rows={4} aria-label={`Información de ${organizationLabels[item.organization]} para ${item.wardName}`} />
+    <CharacterCount value={observation} />
     <div className="review-actions"><Button variant="outline" disabled={busy} onClick={() => void save("pending")}><Save /> Guardar cambios</Button><Button disabled={busy || !observation.trim()} onClick={() => void save("approved")}><CheckCircle2 /> Aprobar y publicar</Button></div>
+    {published && <small className="published-confirmation"><CheckCircle2 /> ¡Publicado!</small>}
   </article>;
 }
 
@@ -1322,7 +1363,6 @@ function AdminView({ data, monthStart, refresh, post }: { data: PortalData; mont
     <div className="view-stack">
       <section className="admin-heading"><div><span className="section-kicker">Configuración de Estaca</span><h2>Barrios y accesos</h2><p>Define quién puede informar y qué barrios tiene asignados.</p></div><Badge variant="outline"><ShieldCheck /> Acceso de administrador</Badge></section>
       <OrganizationApprovalPanel data={data} monthStart={monthStart} post={post} refresh={refresh} />
-      <AdminWardSummary data={data} monthStart={monthStart} />
       <section className="panel admin-panel">
         <div className="panel-heading">
           <div><span className="section-kicker">Estructura</span><h3>Barrios</h3></div>
