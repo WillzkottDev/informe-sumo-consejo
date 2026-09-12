@@ -14,6 +14,7 @@ import {
   FileClock,
   FilePenLine,
   Gauge,
+  HelpCircle,
   LayoutDashboard,
   LockKeyhole,
   LogOut,
@@ -287,6 +288,8 @@ export function PortalClient() {
       );
       if (payload.currentMember.role !== "admin") {
         setActiveView((view) => (view === "stake" || view === "admin" ? "report" : view));
+      } else {
+        setActiveView((view) => (view === "report" ? "stake" : view));
       }
     } catch (error) {
       if (error instanceof Error && (error as Error & { status?: number }).status === 401) {
@@ -470,9 +473,11 @@ export function PortalClient() {
     ...(isAdmin
       ? [{ value: "stake", label: "Resumen Estaca", icon: LayoutDashboard }]
       : []),
-    { value: "report", label: data.currentMember.reportScope === "high_council" ? "Informe mensual" : "Informe de organización", icon: FilePenLine },
+    ...(!isAdmin ? [{ value: "report", label: data.currentMember.reportScope === "high_council" ? "Informe mensual" : "Informe de organización", icon: FilePenLine }] : []),
     { value: "shared", label: "Consulta de informes", icon: BookOpenCheck },
+    ...(isAdmin ? [{ value: "approvals", label: "Aprobaciones", icon: ShieldCheck }] : []),
     { value: "history", label: "Historial", icon: FileClock },
+    ...(!isAdmin ? [{ value: "help", label: "Manual de ayuda", icon: HelpCircle }] : []),
     ...(isAdmin
       ? [{ value: "admin", label: "Administración", icon: Settings2 }]
       : []),
@@ -483,6 +488,8 @@ export function PortalClient() {
     report: { eyebrow: "Asignación de barrio", title: data.currentMember.reportScope === "high_council" ? "Informe mensual" : organizationLabels[data.currentMember.reportScope] },
     history: { eyebrow: "Seguimiento", title: "Historial de informes" },
     shared: { eyebrow: isAdmin ? "Lectura integrada" : "Información autorizada", title: "Consulta por barrio" },
+    approvals: { eyebrow: "Revisión de Estaca", title: "Aprobaciones" },
+    help: { eyebrow: "Orientación", title: "Manual de ayuda" },
     admin: { eyebrow: "Configuración", title: "Barrios y accesos" },
   };
   const title = viewTitles[activeView] ?? viewTitles.report;
@@ -590,7 +597,7 @@ export function PortalClient() {
               <StakeSummary data={data} weekStart={weekStart} onOpenReport={openReport} />
             </TabsContent>
           )}
-          <TabsContent value="report">
+          {!isAdmin && <TabsContent value="report">
             {data.currentMember.reportScope === "high_council" ? <WeeklyReport
               data={data}
               weekStart={weekStart}
@@ -603,14 +610,16 @@ export function PortalClient() {
               autoSaveState={autoSaveState}
               onGoAdmin={() => setActiveView("admin")}
             /> : <OrganizationReportView data={data} monthStart={weekStart} refresh={refresh} post={post} />}
-          </TabsContent>
+          </TabsContent>}
           <TabsContent value="history">
             <HistoryView data={data} onOpenReport={openReport} />
           </TabsContent>
+          {!isAdmin && <TabsContent value="help"><HelpView data={data} /></TabsContent>}
           <TabsContent value="shared"><SharedInformationView data={data} monthStart={weekStart} /></TabsContent>
+          {isAdmin && <TabsContent value="approvals"><OrganizationApprovalPanel data={data} monthStart={weekStart} post={post} refresh={refresh} /></TabsContent>}
           {isAdmin && (
             <TabsContent value="admin">
-              <AdminView data={data} monthStart={weekStart} refresh={refresh} post={post} />
+              <AdminView data={data} refresh={refresh} post={post} />
             </TabsContent>
           )}
         </main>
@@ -623,6 +632,7 @@ export function PortalClient() {
             </TabsTrigger>
           ))}
         </TabsList>
+        <small className="developer-credit">Desarrollado por Williams Hewstone</small>
       </section>
       <Toaster position="top-right" richColors />
     </Tabs>
@@ -637,6 +647,30 @@ function PortalLoading() {
       <p>Preparando el resumen mensual…</p>
     </div>
   );
+}
+
+function HelpView({ data }: { data: PortalData }) {
+  const isHighCouncil = data.currentMember.reportScope === "high_council";
+  const steps = isHighCouncil
+    ? [
+        ["Selecciona el mes y el barrio", "Solo aparecerán los barrios que la administración te haya asignado."],
+        ["Completa el informe mensual", "Escribe únicamente situaciones relevantes en Reunión Sacramental, Consejo de Barrio, Obra Misional y Templo, u Otros enfoques."],
+        ["Revisa los puntos obligatorios", "En cada punto rojo selecciona Sin novedad, Destacable o Requiere atención."],
+        ["Envía el informe", "Los textos se guardan automáticamente, pero debes pulsar Enviar informe para dejarlo formalmente registrado."],
+        ["Consulta información del barrio", "En Consulta de informes puedes leer los aportes aprobados de las organizaciones de tus barrios."],
+      ]
+    : [
+        ["Selecciona el mes", `El formulario corresponde exclusivamente a ${organizationLabels[data.currentMember.reportScope]}.`],
+        ["Informa por cada barrio", "Escribe en cada tarjeta únicamente lo importante ocurrido durante el mes."],
+        ["Espera el guardado automático", "El estado Guardado · pendiente confirma que la información llegó para revisión."],
+        ["Aprobación de Estaca", "La información no será visible para otros usuarios hasta que un administrador la revise y publique."],
+        ["Consulta e historial", "Podrás consultar información aprobada de tu organización en los barrios que tengas autorizados."],
+      ];
+  return <div className="view-stack help-view">
+    <section className="history-heading"><div><span className="section-kicker">Guía según tu perfil</span><h2>{isHighCouncil ? "Sumo Consejo asignado" : organizationLabels[data.currentMember.reportScope]}</h2><p>Pasos básicos para ingresar y consultar información correctamente.</p></div><Badge variant="outline"><HelpCircle /> Ayuda</Badge></section>
+    <section className="help-grid">{steps.map(([title, description], index) => <article className="panel help-card" key={title}><span>{String(index + 1).padStart(2, "0")}</span><div><h3>{title}</h3><p>{description}</p></div></article>)}</section>
+    <section className="panel help-note"><ShieldCheck /><div><strong>Privacidad de la información</strong><p>Solo puedes consultar información según tu perfil y los barrios que te fueron asignados. Si necesitas otro barrio, solicítalo a la administración de Estaca.</p></div></section>
+  </div>;
 }
 
 function LoginScreen({ busy, onLogin }: { busy: boolean; onLogin: (username: string, password: string) => Promise<void> }) {
@@ -1313,7 +1347,7 @@ function OrganizationApprovalPanel({ data, monthStart, post, refresh }: { data: 
   return <section className="panel admin-panel approval-panel"><div className="panel-heading"><div><span className="section-kicker">Revisión previa · {weekLabel(monthStart)}</span><h3>Aprobación de informaciones</h3></div><Badge variant={pending ? "secondary" : "outline"}>{pending} pendientes</Badge></div>{items.length ? <div className="review-grid">{items.map((item) => <OrganizationReviewCard key={item.id} item={item} post={post} refresh={refresh} />)}</div> : <div className="mini-empty">No hay información de organizaciones para revisar este mes.</div>}</section>;
 }
 
-function AdminView({ data, monthStart, refresh, post }: { data: PortalData; monthStart: string; refresh: () => Promise<void>; post: (payload: Record<string, unknown>) => Promise<Record<string, unknown>> }) {
+function AdminView({ data, refresh, post }: { data: PortalData; refresh: () => Promise<void>; post: (payload: Record<string, unknown>) => Promise<Record<string, unknown>> }) {
   const [wardOpen, setWardOpen] = useState(false);
   const [wardName, setWardName] = useState("");
   const [memberOpen, setMemberOpen] = useState(false);
@@ -1361,8 +1395,7 @@ function AdminView({ data, monthStart, refresh, post }: { data: PortalData; mont
 
   return (
     <div className="view-stack">
-      <section className="admin-heading"><div><span className="section-kicker">Configuración de Estaca</span><h2>Barrios y accesos</h2><p>Define quién puede informar y qué barrios tiene asignados.</p></div><Badge variant="outline"><ShieldCheck /> Acceso de administrador</Badge></section>
-      <OrganizationApprovalPanel data={data} monthStart={monthStart} post={post} refresh={refresh} />
+      <section className="admin-heading"><div><span className="section-kicker">Configuración de cuentas</span><h2>Barrios y accesos</h2><p>Administra usuarios, perfiles y barrios asignados. Las publicaciones se revisan en Aprobaciones.</p></div><Badge variant="outline"><ShieldCheck /> Acceso de administrador</Badge></section>
       <section className="panel admin-panel">
         <div className="panel-heading">
           <div><span className="section-kicker">Estructura</span><h3>Barrios</h3></div>

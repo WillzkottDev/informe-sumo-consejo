@@ -203,6 +203,9 @@ export async function POST(request: Request) {
     }
 
     if (action === "save_report") {
+      if (member.role === "admin" || member.reportScope !== "high_council") {
+        throw new PortalError("Solo los integrantes del Sumo Consejo asignados pueden enviar este informe.", 403);
+      }
       const wardId = numericId(payload.wardId, "El barrio");
       if (!(await canAccessWard(member, wardId))) {
         throw new PortalError("No tienes acceso a este barrio.", 403);
