@@ -156,3 +156,26 @@
   .workspace{padding-top:8px;padding-bottom:calc(110px + env(safe-area-inset-bottom))}
   .stake-hero{grid-template-columns:minmax(0,1fr) 64px;padding:17px 15px}.coverage-orbit{position:static;visibility:visible;width:64px;height:64px;flex-basis:64px}.coverage-orbit strong{font-size:16px}.coverage-orbit span{font-size:8px}
 }
+
+/* v8 · historial: detalle funcional para administrador + estado centrado */
+.organization-history-list article{grid-template-columns:minmax(0,1fr) 108px;align-items:center}
+.organization-history-copy{min-width:0}
+.organization-history-copy strong,.organization-history-copy span,.organization-history-copy small{display:block}
+.organization-history-copy strong{color:#28575b;font-size:13px}
+.organization-history-copy span{margin-top:3px;color:#7d9293;font-size:11px}
+.organization-history-copy p{margin:10px 0 0;color:#4c6769;font-size:13px;line-height:1.5;white-space:pre-wrap}
+.organization-history-copy small{margin-top:7px;color:#8a9c9d;font-size:10px}
+.organization-history-status{justify-self:center;align-self:center;display:inline-flex;align-items:center;justify-content:center;min-width:78px;text-align:center}
+.history-detail-dialog{width:min(92vw,760px);max-width:760px;max-height:min(88vh,820px);overflow:auto}
+.history-detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px}
+.history-detail-grid>section{display:grid;grid-template-columns:30px minmax(0,1fr);gap:10px;padding:14px;border:1px solid #dce8e7;border-radius:11px;background:#fbfdfd}
+.history-detail-grid>section>span{color:#9aafaf;font-size:11px;font-weight:800;letter-spacing:.08em}
+.history-detail-grid strong{display:block;color:#28575b;font-size:13px;line-height:1.35}
+.history-detail-grid p{margin:7px 0 9px;color:#4c6769;font-size:13px;line-height:1.5;white-space:pre-wrap}
+.history-detail-grid small{display:block;margin-top:7px;color:#7d9293;font-size:11px;line-height:1.45}
+@media (max-width:760px){
+  .organization-history-list article{grid-template-columns:minmax(0,1fr) 92px;gap:10px}
+  .organization-history-status{min-width:72px}
+  .history-detail-dialog{width:calc(100vw - 22px);max-width:none;max-height:90vh;padding:18px 14px}
+  .history-detail-grid{grid-template-columns:1fr}
+}
