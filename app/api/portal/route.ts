@@ -313,9 +313,26 @@ export async function POST(request: Request) {
       const name = cleanText(payload.name, 80);
       if (name.length < 2) throw new PortalError("Ingresa el nombre del barrio.");
       const [existing] = await db.select().from(wards).where(eq(wards.name, name)).limit(1);
-      if (existing) throw new PortalError("Ese barrio ya está registrado.");
+      if (existing?.active) throw new PortalError("Ese barrio ya está registrado.");
+      if (existing) {
+        const [ward] = await db.update(wards).set({ active: true }).where(eq(wards.id, existing.id)).returning();
+        return Response.json({ ward });
+      }
       const [ward] = await db.insert(wards).values({ name }).returning();
       return Response.json({ ward }, { status: 201 });
+    }
+
+    if (action === "delete_ward") {
+      requireAdmin(member);
+      const wardId = numericId(payload.wardId, "El barrio");
+      const [existing] = await db.select().from(wards).where(eq(wards.id, wardId)).limit(1);
+      if (!existing || !existing.active) throw new PortalError("El barrio ya no existe.", 404);
+
+      // Se desactiva en lugar de borrar físicamente para conservar el historial.
+      // Las asignaciones sí se eliminan para que ningún usuario siga viéndolo.
+      await db.delete(memberWards).where(eq(memberWards.wardId, wardId));
+      const [ward] = await db.update(wards).set({ active: false }).where(eq(wards.id, wardId)).returning();
+      return Response.json({ ward });
     }
 
     if (action === "save_member") {
