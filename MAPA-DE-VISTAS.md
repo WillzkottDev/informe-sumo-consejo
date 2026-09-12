@@ -7,16 +7,18 @@ flowchart TD
     B --> D[Sumo Consejo]
     B --> E[Organización]
     C --> C1[Resumen Estaca]
-    C --> C2[Informe mensual]
-    C --> C3[Consulta por barrio]
-    C --> C4[Historial]
-    C --> C5[Administración]
+    C --> C2[Consulta por barrio]
+    C --> C3[Historial completo]
+    C --> C4[Aprobaciones de Estaca]
+    C --> C5[Configuración de cuentas]
     D --> D1[Informe mensual asignado]
     D --> D2[Consulta de barrios asignados]
     D --> D3[Historial asignado]
+    D --> D4[Manual de ayuda]
     E --> E1[Informe de su organización]
     E --> E2[Consulta de su organización]
     E --> E3[Historial de su organización]
+    E --> E4[Manual de ayuda]
 ```
 
 ## Permisos por perfil
@@ -24,11 +26,12 @@ flowchart TD
 | Vista | Administrador de Estaca | Sumo Consejo | Organización |
 |---|---|---|---|
 | Resumen Estaca | Todos los barrios | No | No |
-| Ingreso de informe | Cualquier barrio | Barrios asignados | Su organización, por barrio |
+| Ingreso de informe | No; solo consulta y administra | Barrios asignados | Su organización, por barrio |
 | Consulta por barrio | Todo, incluidos pendientes | Informes del Sumo Consejo y aportes aprobados de sus barrios | Aportes aprobados de su organización en los barrios asignados |
 | Historial | Informes y organizaciones | Información de sus barrios | Información de su organización |
-| Aprobación y publicación | Sí | No | No |
-| Barrios y usuarios | Sí | No | No |
+| Aprobaciones de Estaca | Sí; vista independiente | No | No |
+| Administración de cuentas y barrios | Sí | No | No |
+| Manual de ayuda | No | Guía de Sumo Consejo | Guía de su organización |
 
 ## Flujo de publicación
 
