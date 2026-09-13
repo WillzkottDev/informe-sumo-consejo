@@ -26,7 +26,6 @@ import {
   ShieldCheck,
   Sparkles,
   Users,
-  Trash2,
   X,
 } from "lucide-react";
 import {
@@ -595,7 +594,7 @@ export function PortalClient() {
         <main className="workspace">
           {isAdmin && (
             <TabsContent value="stake">
-              <StakeSummary data={data} weekStart={weekStart} />
+              <StakeSummary data={data} weekStart={weekStart} onOpenReport={openReport} />
             </TabsContent>
           )}
           {!isAdmin && <TabsContent value="report">
@@ -730,11 +729,12 @@ function AccessState({
 function StakeSummary({
   data,
   weekStart,
+  onOpenReport,
 }: {
   data: PortalData;
   weekStart: string;
+  onOpenReport: (wardId: number, week: string) => void;
 }) {
-  const [detailWardId, setDetailWardId] = useState<number | null>(null);
   const weeklyReports = data.reports.filter((report) => report.weekStart === weekStart);
   const reportByWard = new Map(weeklyReports.map((report) => [report.wardId, report]));
   const submitted = weeklyReports.filter((report) => report.status === "submitted");
@@ -744,18 +744,13 @@ function StakeSummary({
     [report.punctualityState, report.followupState, report.scheduleState].includes("destacable"),
   );
   const progress = data.wards.length ? Math.round((submitted.length / data.wards.length) * 100) : 0;
-  const detailWard = data.wards.find((ward) => ward.id === detailWardId) ?? null;
-  const detailReport = detailWardId ? reportByWard.get(detailWardId) ?? null : null;
-  const detailOrganizations = detailWardId
-    ? data.organizationReports.filter((item) => item.wardId === detailWardId && item.monthStart === weekStart)
-    : [];
 
   return (
     <div className="view-stack">
       <section className="stake-hero">
         <div className="hero-copy">
           <div className="eyebrow-pill"><CalendarDays /> {weekLabel(weekStart)}</div>
-          <h2>Un mes, toda la Estaca</h2>
+          <h2>Una mes, toda la Estaca</h2>
           <p>
             Estado de entrega y observaciones relevantes de todos los barrios en un solo lugar.
           </p>
@@ -793,7 +788,7 @@ function StakeSummary({
                 const report = reportByWard.get(ward.id);
                 const status = report?.status === "submitted" ? "submitted" : report ? "draft" : "pending";
                 return (
-                  <button key={ward.id} className="ward-status" onClick={() => setDetailWardId(ward.id)}>
+                  <button key={ward.id} className="ward-status" onClick={() => onOpenReport(ward.id, weekStart)}>
                     <span className={`status-dot ${status}`} />
                     <div>
                       <strong>{ward.name}</strong>
@@ -816,53 +811,6 @@ function StakeSummary({
           <WeeklyDigest reports={submitted} />
         </>
       )}
-
-      <Dialog open={Boolean(detailWard)} onOpenChange={(open) => !open && setDetailWardId(null)}>
-        <DialogContent className="history-detail-dialog">
-          {detailWard && <>
-            <DialogHeader>
-              <span className="section-kicker">Resumen del barrio · {weekLabel(weekStart)}</span>
-              <DialogTitle>{detailWard.name}</DialogTitle>
-              <DialogDescription>Informe de Sumo Consejo e informaciones de organizaciones registradas durante el mes.</DialogDescription>
-            </DialogHeader>
-
-            <div className="panel-heading">
-              <div><span className="section-kicker">Sumo Consejo</span><h3>Informe mensual</h3></div>
-              {detailReport && <Badge variant={detailReport.status === "submitted" ? "default" : "secondary"}>{detailReport.status === "submitted" ? "Enviado" : "Borrador"}</Badge>}
-            </div>
-            {detailReport ? <div className="history-detail-grid">
-              <section>
-                <span>01</span><div><strong>Reunión Sacramental</strong><p>{detailReport.sacramentalObservation || "Sin observaciones."}</p><StatePill state={detailReport.punctualityState} />{detailReport.punctualityNote && <small>{detailReport.punctualityNote}</small>}</div>
-              </section>
-              <section>
-                <span>02</span><div><strong>Consejo de Barrio</strong><p>{detailReport.wardCouncilObservation || "Sin observaciones."}</p><StatePill state={detailReport.followupState} />{detailReport.followupNote && <small>{detailReport.followupNote}</small>}</div>
-              </section>
-              <section>
-                <span>03</span><div><strong>Obra Misional y Obra de Templo e Historia Familiar</strong><p>{detailReport.missionaryObservation || "Sin observaciones."}</p></div>
-              </section>
-              <section>
-                <span>04</span><div><strong>Otros enfoques relevantes</strong><p>{detailReport.otherObservation || "Sin observaciones."}</p><StatePill state={detailReport.scheduleState} />{detailReport.scheduleNote && <small>{detailReport.scheduleNote}</small>}</div>
-              </section>
-            </div> : <div className="mini-empty">Este barrio todavía no tiene informe de Sumo Consejo para el mes seleccionado.</div>}
-
-            <div className="panel-heading">
-              <div><span className="section-kicker">Organizaciones</span><h3>Informaciones del mes</h3></div>
-              <Badge variant="outline">{detailOrganizations.length} registros</Badge>
-            </div>
-            {detailOrganizations.length ? <div className="organization-history-list">
-              {detailOrganizations.map((item) => <article key={item.id}>
-                <div className="organization-history-copy">
-                  <div><strong>{organizationLabels[item.organization]}</strong><span>{item.reporterName || "Sin responsable"} · {dateTime(item.updatedAt)}</span></div>
-                  <p>{item.observation || "Sin observación escrita."}</p>
-                </div>
-                <Badge className="organization-history-status" variant={item.approvalStatus === "approved" ? "default" : "secondary"}>{item.approvalStatus === "approved" ? "Publicado" : "Pendiente"}</Badge>
-              </article>)}
-            </div> : <div className="mini-empty">No hay informaciones de organizaciones para este barrio durante el mes seleccionado.</div>}
-
-            <DialogFooter><Button variant="outline" onClick={() => setDetailWardId(null)}>Cerrar</Button></DialogFooter>
-          </>}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
@@ -1288,9 +1236,7 @@ function SharedInformationView({ data, monthStart }: { data: PortalData; monthSt
 function HistoryView({ data, onOpenReport }: { data: PortalData; onOpenReport: (wardId: number, week: string) => void }) {
   const [wardFilter, setWardFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [detailReport, setDetailReport] = useState<Report | null>(null);
-  const isAdmin = data.currentMember.role === "admin";
-  const showCouncilReports = isAdmin || data.currentMember.reportScope === "high_council";
+  const showCouncilReports = data.currentMember.role === "admin" || data.currentMember.reportScope === "high_council";
   const filtered = data.reports.filter(
     (report) =>
       (wardFilter === "all" || report.wardId === Number(wardFilter)) &&
@@ -1324,7 +1270,7 @@ function HistoryView({ data, onOpenReport }: { data: PortalData; onOpenReport: (
                   <TableCell><Badge variant={report.status === "submitted" ? "default" : "secondary"}>{report.status === "submitted" ? "Enviado" : "Borrador"}</Badge></TableCell>
                   <TableCell>{reportNeedsAttention(report) ? <StatePill state="requiere_atencion" /> : <span className="all-good"><Check /> Sin alertas</span>}</TableCell>
                   <TableCell><span className="responsible-cell">{report.reporterName || "-"}<small>{dateTime(report.updatedAt)}</small></span></TableCell>
-                  <TableCell className="text-right"><Button variant="ghost" size="sm" onClick={() => isAdmin ? setDetailReport(report) : onOpenReport(report.wardId, report.weekStart)}>Abrir <ArrowRight /></Button></TableCell>
+                  <TableCell className="text-right"><Button variant="ghost" size="sm" onClick={() => onOpenReport(report.wardId, report.weekStart)}>Abrir <ArrowRight /></Button></TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -1333,35 +1279,8 @@ function HistoryView({ data, onOpenReport }: { data: PortalData; onOpenReport: (
       </section>}
       <section className="panel organization-history-panel">
         <div className="panel-heading"><div><span className="section-kicker">Organizaciones</span><h3>Historial de informaciones</h3></div><Badge variant="outline">{organizationHistory.length} registros</Badge></div>
-        {organizationHistory.length ? <div className="organization-history-list">{organizationHistory.map((item) => <article key={item.id}><div className="organization-history-copy"><div><strong>{organizationLabels[item.organization]}</strong><span>{item.wardName} · {weekLabel(item.monthStart)}</span></div><p>{item.observation || "Sin observación escrita."}</p><small>{item.reporterName} · {dateTime(item.updatedAt)}</small></div><Badge className="organization-history-status" variant={item.approvalStatus === "approved" ? "default" : "secondary"}>{item.approvalStatus === "approved" ? "Publicado" : "Pendiente"}</Badge></article>)}</div> : <div className="mini-empty">No hay informaciones de organizaciones para este filtro.</div>}
+        {organizationHistory.length ? <div className="organization-history-list">{organizationHistory.map((item) => <article key={item.id}><div><strong>{organizationLabels[item.organization]}</strong><span>{item.wardName} · {weekLabel(item.monthStart)}</span></div><Badge variant={item.approvalStatus === "approved" ? "default" : "secondary"}>{item.approvalStatus === "approved" ? "Publicado" : "Pendiente"}</Badge><p>{item.observation || "Sin observación escrita."}</p><small>{item.reporterName} · {dateTime(item.updatedAt)}</small></article>)}</div> : <div className="mini-empty">No hay informaciones de organizaciones para este filtro.</div>}
       </section>
-
-      <Dialog open={Boolean(detailReport)} onOpenChange={(open) => !open && setDetailReport(null)}>
-        <DialogContent className="history-detail-dialog">
-          {detailReport && <>
-            <DialogHeader>
-              <span className="section-kicker">Detalle del informe</span>
-              <DialogTitle>{detailReport.wardName} · {weekLabel(detailReport.weekStart)}</DialogTitle>
-              <DialogDescription>Informe enviado por {detailReport.reporterName || "Sin responsable"} · {dateTime(detailReport.updatedAt)}</DialogDescription>
-            </DialogHeader>
-            <div className="history-detail-grid">
-              <section>
-                <span>01</span><div><strong>Reunión Sacramental</strong><p>{detailReport.sacramentalObservation || "Sin observaciones."}</p><StatePill state={detailReport.punctualityState} />{detailReport.punctualityNote && <small>{detailReport.punctualityNote}</small>}</div>
-              </section>
-              <section>
-                <span>02</span><div><strong>Consejo de Barrio</strong><p>{detailReport.wardCouncilObservation || "Sin observaciones."}</p><StatePill state={detailReport.followupState} />{detailReport.followupNote && <small>{detailReport.followupNote}</small>}</div>
-              </section>
-              <section>
-                <span>03</span><div><strong>Obra Misional y Obra de Templo e Historia Familiar</strong><p>{detailReport.missionaryObservation || "Sin observaciones."}</p></div>
-              </section>
-              <section>
-                <span>04</span><div><strong>Otros enfoques relevantes</strong><p>{detailReport.otherObservation || "Sin observaciones."}</p><StatePill state={detailReport.scheduleState} />{detailReport.scheduleNote && <small>{detailReport.scheduleNote}</small>}</div>
-              </section>
-            </div>
-            <DialogFooter><Button variant="outline" onClick={() => setDetailReport(null)}>Cerrar</Button></DialogFooter>
-          </>}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
@@ -1433,7 +1352,6 @@ function AdminView({ data, refresh, post }: { data: PortalData; refresh: () => P
   const [wardName, setWardName] = useState("");
   const [memberOpen, setMemberOpen] = useState(false);
   const [editingMember, setEditingMember] = useState<Member | null>(null);
-  const [deletingWard, setDeletingWard] = useState<Ward | null>(null);
   const [memberForm, setMemberForm] = useState({ displayName: "", email: "", username: "", password: "", role: "leader" as "admin" | "leader", reportScope: "high_council" as ReportScope, active: true, wardIds: [] as number[] });
   const [submitting, setSubmitting] = useState(false);
 
@@ -1464,18 +1382,6 @@ function AdminView({ data, refresh, post }: { data: PortalData; refresh: () => P
     finally { setSubmitting(false); }
   };
 
-  const deleteWard = async () => {
-    if (!deletingWard) return;
-    setSubmitting(true);
-    try {
-      await post({ action: "delete_ward", wardId: deletingWard.id });
-      toast.success(`Barrio ${deletingWard.name} eliminado`);
-      setDeletingWard(null);
-      await refresh();
-    } catch (error) { toast.error(error instanceof Error ? error.message : "No fue posible eliminar el barrio."); }
-    finally { setSubmitting(false); }
-  };
-
   const saveMember = async () => {
     setSubmitting(true);
     try {
@@ -1502,7 +1408,7 @@ function AdminView({ data, refresh, post }: { data: PortalData; refresh: () => P
             </DialogContent>
           </Dialog>
         </div>
-        {data.wards.length ? <div className="ward-chips">{data.wards.map((ward) => <div key={ward.id}><Building2 /><span>{ward.name}</span><Badge variant="secondary">Activo</Badge><Button variant="ghost" size="icon" aria-label={`Eliminar ${ward.name}`} title={`Eliminar ${ward.name}`} onClick={() => setDeletingWard(ward)}><Trash2 /></Button></div>)}</div> : <div className="mini-empty">Aún no has agregado barrios.</div>}
+        {data.wards.length ? <div className="ward-chips">{data.wards.map((ward) => <div key={ward.id}><Building2 /><span>{ward.name}</span><Badge variant="secondary">Activo</Badge></div>)}</div> : <div className="mini-empty">Aún no has agregado barrios.</div>}
       </section>
 
       <section className="panel admin-panel">
@@ -1522,13 +1428,6 @@ function AdminView({ data, refresh, post }: { data: PortalData; refresh: () => P
           })}
         </div>
       </section>
-
-      <Dialog open={Boolean(deletingWard)} onOpenChange={(open) => !open && setDeletingWard(null)}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Eliminar barrio</DialogTitle><DialogDescription>{deletingWard ? `¿Quieres eliminar ${deletingWard.name} de la Estaca? Dejará de aparecer en los paneles y se quitarán sus asignaciones de usuarios. Los informes históricos quedarán conservados en la base de datos.` : ""}</DialogDescription></DialogHeader>
-          <DialogFooter><Button variant="outline" disabled={submitting} onClick={() => setDeletingWard(null)}>Cancelar</Button><Button variant="destructive" disabled={submitting} onClick={() => void deleteWard()}><Trash2 /> {submitting ? "Eliminando…" : "Eliminar barrio"}</Button></DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={memberOpen} onOpenChange={setMemberOpen}>
         <DialogContent className="member-dialog">
