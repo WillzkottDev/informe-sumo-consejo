@@ -632,6 +632,10 @@ export function PortalClient() {
               <span>{item.label.replace("Resumen ", "").replace("Informe ", "")}</span>
             </TabsTrigger>
           ))}
+          <button className="mobile-signout" type="button" onClick={() => void signOut()} aria-label="Cerrar sesión">
+            <LogOut />
+            <span>Salir</span>
+          </button>
         </TabsList>
       </section>
       <Toaster position="top-right" richColors />
