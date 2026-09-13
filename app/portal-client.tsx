@@ -590,6 +590,9 @@ export function PortalClient() {
               </Select>
             </div>
           )}
+          <Button variant="ghost" size="icon" className="mobile-header-signout" onClick={() => void signOut()} aria-label="Cerrar sesión">
+            <LogOut />
+          </Button>
         </header>
 
         <main className="workspace">
@@ -632,10 +635,6 @@ export function PortalClient() {
               <span>{item.label.replace("Resumen ", "").replace("Informe ", "")}</span>
             </TabsTrigger>
           ))}
-          <button className="mobile-signout" type="button" onClick={() => void signOut()} aria-label="Cerrar sesión">
-            <LogOut />
-            <span>Salir</span>
-          </button>
         </TabsList>
       </section>
       <Toaster position="top-right" richColors />
