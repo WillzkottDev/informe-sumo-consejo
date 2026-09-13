@@ -308,6 +308,17 @@ export async function POST(request: Request) {
       return Response.json({ organizationReport: saved });
     }
 
+    if (action === "delete_report") {
+      requireAdmin(member);
+      const reportId = numericId(payload.reportId, "El informe");
+      const reportType = payload.reportType === "organization" ? "organization" : "high_council";
+      const deleted = reportType === "organization"
+        ? await db.delete(organizationReports).where(eq(organizationReports.id, reportId)).returning({ id: organizationReports.id })
+        : await db.delete(reports).where(eq(reports.id, reportId)).returning({ id: reports.id });
+      if (!deleted.length) throw new PortalError("El informe ya no existe.", 404);
+      return Response.json({ ok: true });
+    }
+
     if (action === "create_ward") {
       requireAdmin(member);
       const name = cleanText(payload.name, 80);
@@ -316,6 +327,18 @@ export async function POST(request: Request) {
       if (existing) throw new PortalError("Ese barrio ya está registrado.");
       const [ward] = await db.insert(wards).values({ name }).returning();
       return Response.json({ ward }, { status: 201 });
+    }
+
+    if (action === "delete_ward") {
+      requireAdmin(member);
+      const wardId = numericId(payload.wardId, "El barrio");
+      const [existing] = await db.select({ id: wards.id }).from(wards).where(eq(wards.id, wardId)).limit(1);
+      if (!existing) throw new PortalError("El barrio ya no existe.", 404);
+      await db.delete(memberWards).where(eq(memberWards.wardId, wardId));
+      await db.delete(organizationReports).where(eq(organizationReports.wardId, wardId));
+      await db.delete(reports).where(eq(reports.wardId, wardId));
+      await db.delete(wards).where(eq(wards.id, wardId));
+      return Response.json({ ok: true });
     }
 
     if (action === "save_member") {

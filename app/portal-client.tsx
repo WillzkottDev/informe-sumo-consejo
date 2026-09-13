@@ -25,6 +25,7 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Users,
   X,
 } from "lucide-react";
@@ -612,7 +613,7 @@ export function PortalClient() {
             /> : <OrganizationReportView data={data} monthStart={weekStart} refresh={refresh} post={post} />}
           </TabsContent>}
           <TabsContent value="history">
-            <HistoryView data={data} onOpenReport={openReport} />
+            <HistoryView data={data} onOpenReport={openReport} post={post} refresh={refresh} />
           </TabsContent>
           {!isAdmin && <TabsContent value="help"><HelpView data={data} /></TabsContent>}
           <TabsContent value="shared"><SharedInformationView data={data} monthStart={weekStart} /></TabsContent>
@@ -1232,7 +1233,7 @@ function SharedInformationView({ data, monthStart }: { data: PortalData; monthSt
   );
 }
 
-function HistoryView({ data, onOpenReport }: { data: PortalData; onOpenReport: (wardId: number, week: string) => void }) {
+function HistoryView({ data, onOpenReport, post, refresh }: { data: PortalData; onOpenReport: (wardId: number, week: string) => void; post: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>; refresh: () => Promise<void> }) {
   const [wardFilter, setWardFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const showCouncilReports = data.currentMember.role === "admin" || data.currentMember.reportScope === "high_council";
@@ -1242,6 +1243,14 @@ function HistoryView({ data, onOpenReport }: { data: PortalData; onOpenReport: (
       (statusFilter === "all" || report.status === statusFilter),
   );
   const organizationHistory = data.organizationReports.filter((report) => wardFilter === "all" || report.wardId === Number(wardFilter));
+  const removeReport = async (reportId: number, reportType: "high_council" | "organization") => {
+    if (!window.confirm("¿Eliminar definitivamente este informe y su texto? Esta acción no se puede deshacer.")) return;
+    try {
+      await post({ action: "delete_report", reportId, reportType });
+      toast.success("Informe eliminado");
+      await refresh();
+    } catch (error) { toast.error(error instanceof Error ? error.message : "No fue posible eliminar el informe."); }
+  };
   return (
     <div className="view-stack">
       <section className="history-heading">
@@ -1269,7 +1278,7 @@ function HistoryView({ data, onOpenReport }: { data: PortalData; onOpenReport: (
                   <TableCell><Badge variant={report.status === "submitted" ? "default" : "secondary"}>{report.status === "submitted" ? "Enviado" : "Borrador"}</Badge></TableCell>
                   <TableCell>{reportNeedsAttention(report) ? <StatePill state="requiere_atencion" /> : <span className="all-good"><Check /> Sin alertas</span>}</TableCell>
                   <TableCell><span className="responsible-cell">{report.reporterName || "-"}<small>{dateTime(report.updatedAt)}</small></span></TableCell>
-                  <TableCell className="text-right"><Button variant="ghost" size="sm" onClick={() => onOpenReport(report.wardId, report.weekStart)}>Abrir <ArrowRight /></Button></TableCell>
+                  <TableCell className="text-right"><div className="history-row-actions"><Button variant="ghost" size="sm" onClick={() => onOpenReport(report.wardId, report.weekStart)}>Abrir <ArrowRight /></Button>{data.currentMember.role === "admin" && <Button variant="ghost" size="icon" className="danger-action" aria-label={`Eliminar informe de ${report.wardName}`} onClick={() => void removeReport(report.id, "high_council")}><Trash2 /></Button>}</div></TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -1278,7 +1287,7 @@ function HistoryView({ data, onOpenReport }: { data: PortalData; onOpenReport: (
       </section>}
       <section className="panel organization-history-panel">
         <div className="panel-heading"><div><span className="section-kicker">Organizaciones</span><h3>Historial de informaciones</h3></div><Badge variant="outline">{organizationHistory.length} registros</Badge></div>
-        {organizationHistory.length ? <div className="organization-history-list">{organizationHistory.map((item) => <article key={item.id}><div><strong>{organizationLabels[item.organization]}</strong><span>{item.wardName} · {weekLabel(item.monthStart)}</span></div><Badge variant={item.approvalStatus === "approved" ? "default" : "secondary"}>{item.approvalStatus === "approved" ? "Publicado" : "Pendiente"}</Badge><p>{item.observation || "Sin observación escrita."}</p><small>{item.reporterName} · {dateTime(item.updatedAt)}</small></article>)}</div> : <div className="mini-empty">No hay informaciones de organizaciones para este filtro.</div>}
+        {organizationHistory.length ? <div className="organization-history-list">{organizationHistory.map((item) => <article key={item.id}><div><strong>{organizationLabels[item.organization]}</strong><span>{item.wardName} · {weekLabel(item.monthStart)}</span></div><div className="history-org-actions"><Badge variant={item.approvalStatus === "approved" ? "default" : "secondary"}>{item.approvalStatus === "approved" ? "Publicado" : "Pendiente"}</Badge>{data.currentMember.role === "admin" && <Button variant="ghost" size="icon" className="danger-action" aria-label={`Eliminar información de ${item.wardName}`} onClick={() => void removeReport(item.id, "organization")}><Trash2 /></Button>}</div><p>{item.observation || "Sin observación escrita."}</p><small>{item.reporterName} · {dateTime(item.updatedAt)}</small></article>)}</div> : <div className="mini-empty">No hay informaciones de organizaciones para este filtro.</div>}
       </section>
     </div>
   );
@@ -1331,11 +1340,21 @@ function OrganizationReviewCard({ item, post, refresh }: { item: OrganizationRep
     } catch (error) { toast.error(error instanceof Error ? error.message : "No fue posible revisar la información."); }
     finally { setBusy(false); }
   };
+  const remove = async () => {
+    if (!window.confirm("¿Eliminar definitivamente esta información? Esta acción no se puede deshacer.")) return;
+    setBusy(true);
+    try {
+      await post({ action: "delete_report", reportId: item.id, reportType: "organization" });
+      toast.success("Información eliminada");
+      await refresh();
+    } catch (error) { toast.error(error instanceof Error ? error.message : "No fue posible eliminar."); }
+    finally { setBusy(false); }
+  };
   return <article className={`review-card ${item.approvalStatus}`}>
     <div className="review-card-heading"><div><span>{item.wardName}</span><h4>{organizationLabels[item.organization]}</h4><small>{item.reporterName} · {dateTime(item.updatedAt)}</small></div><Badge variant={item.approvalStatus === "approved" ? "default" : "secondary"}>{item.approvalStatus === "approved" ? "Aprobado" : "Pendiente"}</Badge></div>
     <Textarea value={observation} maxLength={TEXT_LIMIT} onChange={(event) => { setObservation(event.target.value); setPublished(false); }} rows={4} aria-label={`Información de ${organizationLabels[item.organization]} para ${item.wardName}`} />
     <CharacterCount value={observation} />
-    <div className="review-actions"><Button variant="outline" disabled={busy} onClick={() => void save("pending")}><Save /> Guardar cambios</Button><Button disabled={busy || !observation.trim()} onClick={() => void save("approved")}><CheckCircle2 /> Aprobar y publicar</Button></div>
+    <div className="review-actions"><Button variant="ghost" className="danger-action" disabled={busy} onClick={() => void remove()}><Trash2 /> Eliminar</Button><Button variant="outline" disabled={busy} onClick={() => void save("pending")}><Save /> Guardar cambios</Button><Button disabled={busy || !observation.trim()} onClick={() => void save("approved")}><CheckCircle2 /> Aprobar y publicar</Button></div>
     {published && <small className="published-confirmation"><CheckCircle2 /> ¡Publicado!</small>}
   </article>;
 }
@@ -1381,6 +1400,17 @@ function AdminView({ data, refresh, post }: { data: PortalData; refresh: () => P
     finally { setSubmitting(false); }
   };
 
+  const removeWard = async (ward: Ward) => {
+    if (!window.confirm(`¿Eliminar el barrio ${ward.name}? También se eliminarán sus asignaciones e informes. Esta acción no se puede deshacer.`)) return;
+    setSubmitting(true);
+    try {
+      await post({ action: "delete_ward", wardId: ward.id });
+      toast.success("Barrio eliminado");
+      await refresh();
+    } catch (error) { toast.error(error instanceof Error ? error.message : "No fue posible eliminar el barrio."); }
+    finally { setSubmitting(false); }
+  };
+
   const saveMember = async () => {
     setSubmitting(true);
     try {
@@ -1407,7 +1437,7 @@ function AdminView({ data, refresh, post }: { data: PortalData; refresh: () => P
             </DialogContent>
           </Dialog>
         </div>
-        {data.wards.length ? <div className="ward-chips">{data.wards.map((ward) => <div key={ward.id}><Building2 /><span>{ward.name}</span><Badge variant="secondary">Activo</Badge></div>)}</div> : <div className="mini-empty">Aún no has agregado barrios.</div>}
+        {data.wards.length ? <div className="ward-chips">{data.wards.map((ward) => <div key={ward.id}><Building2 /><span>{ward.name}</span><Badge variant="secondary">Activo</Badge><Button variant="ghost" size="icon" className="danger-action ward-delete" disabled={submitting} aria-label={`Eliminar barrio ${ward.name}`} onClick={() => void removeWard(ward)}><Trash2 /></Button></div>)}</div> : <div className="mini-empty">Aún no has agregado barrios.</div>}
       </section>
 
       <section className="panel admin-panel">
