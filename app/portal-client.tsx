@@ -632,7 +632,6 @@ export function PortalClient() {
             </TabsTrigger>
           ))}
         </TabsList>
-        <small className="developer-credit">Desarrollado por Williams Hewstone</small>
       </section>
       <Toaster position="top-right" richColors />
     </Tabs>
