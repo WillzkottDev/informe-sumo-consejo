@@ -628,14 +628,7 @@ export function PortalClient() {
           )}
         </main>
 
-        <TabsList className="mobile-bottom-nav" variant="line" aria-label="Navegación principal">
-          {navItems.map((item) => (
-            <TabsTrigger key={item.value} value={item.value}>
-              <item.icon />
-              <span>{item.label.replace("Resumen ", "").replace("Informe ", "")}</span>
-            </TabsTrigger>
-          ))}
-        </TabsList>
+        {/* En móvil la navegación queda disponible en el menú lateral. */}
       </section>
       <Toaster position="top-right" richColors />
     </Tabs>
