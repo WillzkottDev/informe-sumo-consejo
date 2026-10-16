@@ -8,6 +8,7 @@ import {
   CalendarDays,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   CircleUserRound,
   Clock3,
@@ -1124,38 +1125,187 @@ function OrganizationReportView({
 }) {
   const organization = data.currentMember.reportScope as OrganizationScope;
   const [drafts, setDrafts] = useState<Record<number, string>>({});
-  const [savingWard, setSavingWard] = useState<number | null>(null);
-  const [savedWard, setSavedWard] = useState<number | null>(null);
-  const timers = useRef<Record<number, number>>({});
+  const [saveStates, setSaveStates] = useState<Record<string, "saving" | "saved" | "error">>({});
+  const [expandedWard, setExpandedWard] = useState<{ key: string; wardId: number | null } | null>(null);
+  const timers = useRef<Record<string, number>>({});
+  const versions = useRef<Record<string, number>>({});
+  const locallyEdited = useRef<Set<string>>(new Set());
+  const latestDrafts = useRef<Record<string, string>>({});
+  const saveQueues = useRef<Record<string, Promise<void>>>({});
+  const scopeKey = `${monthStart}:${organization}`;
+
+  // El primer barrio aparece abierto al cambiar de mes u organización.
+  const expandedWardId = expandedWard?.key === scopeKey
+    ? expandedWard.wardId
+    : (data.wards[0]?.id ?? null);
 
   useEffect(() => {
     const next: Record<number, string> = {};
     for (const ward of data.wards) {
-      next[ward.id] = data.organizationReports.find((item) => item.wardId === ward.id && item.monthStart === monthStart && item.organization === organization)?.observation ?? "";
+      const key = `${scopeKey}:${ward.id}`;
+      const persisted = data.organizationReports.find((item) =>
+        item.wardId === ward.id &&
+        item.monthStart === monthStart &&
+        item.organization === organization
+      )?.observation ?? "";
+      // Una actualización de otros barrios no debe borrar texto aún no guardado.
+      next[ward.id] = locallyEdited.current.has(key)
+        ? (latestDrafts.current[key] ?? persisted)
+        : persisted;
+      latestDrafts.current[key] = next[ward.id];
     }
     setDrafts(next);
-  }, [data, monthStart, organization]);
+  }, [data, monthStart, organization, scopeKey]);
 
   const updateObservation = (wardId: number, observation: string) => {
+    const key = `${scopeKey}:${wardId}`;
+    latestDrafts.current[key] = observation;
+    locallyEdited.current.add(key);
+    const revision = (versions.current[key] ?? 0) + 1;
+    versions.current[key] = revision;
     setDrafts((current) => ({ ...current, [wardId]: observation }));
-    setSavingWard(wardId);
-    setSavedWard(null);
-    if (timers.current[wardId]) window.clearTimeout(timers.current[wardId]);
-    timers.current[wardId] = window.setTimeout(async () => {
-      try {
-        await post({ action: "save_organization_report", wardId, monthStart, organization, observation });
-        await refresh();
-        setSavingWard(null);
-        setSavedWard(wardId);
-      } catch (error) {
-        setSavingWard(null);
-        toast.error(error instanceof Error ? error.message : "No fue posible guardar automáticamente.");
-      }
+    setSaveStates((current) => ({ ...current, [key]: "saving" }));
+
+    if (timers.current[key]) window.clearTimeout(timers.current[key]);
+    timers.current[key] = window.setTimeout(() => {
+      // Serializa cambios del mismo barrio para impedir que un envío antiguo
+      // sobrescriba uno más reciente si la conexión es lenta.
+      const previous = saveQueues.current[key] ?? Promise.resolve();
+      const pending = previous.catch(() => undefined).then(async () => {
+        try {
+          await post({
+            action: "save_organization_report",
+            wardId,
+            monthStart,
+            organization,
+            observation,
+          });
+          if (versions.current[key] === revision) {
+            locallyEdited.current.delete(key);
+            setSaveStates((current) => ({ ...current, [key]: "saved" }));
+          }
+          await refresh();
+        } catch (error) {
+          if (versions.current[key] === revision) {
+            setSaveStates((current) => ({ ...current, [key]: "error" }));
+          }
+          toast.error(error instanceof Error ? error.message : "No fue posible guardar automáticamente.");
+        }
+      });
+      saveQueues.current[key] = pending;
     }, 900);
   };
 
   return (
     <div className="view-stack organization-view">
+      <style>{`
+        .organization-card .organization-mobile-toggle { display: none; }
+        .organization-card .organization-card-body > label {
+          display: block;
+          margin: 17px 0 8px;
+          color: #496467;
+          font-size: 12px;
+          font-weight: 700;
+        }
+        @media (max-width: 760px) {
+          .organization-card.organization-tone-empty {
+            border-color: #d9e2e2;
+            background: #f5f7f7;
+          }
+          .organization-card.organization-tone-saving {
+            border-color: #edd38e;
+            background: #fff8e7;
+          }
+          .organization-card.organization-tone-saved {
+            border-color: #add8bd;
+            background: #eaf7ef;
+          }
+          .organization-card .organization-desktop-heading { display: none; }
+          .organization-card .organization-mobile-toggle {
+            display: flex;
+            width: 100%;
+            min-height: 86px;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 0;
+            color: inherit;
+            border: 0;
+            background: transparent;
+            text-align: left;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+          }
+          .organization-card .organization-mobile-toggle:focus-visible {
+            outline: 2px solid #176b73;
+            outline-offset: 4px;
+            border-radius: 8px;
+          }
+          .organization-card .organization-mobile-title {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            align-items: flex-start;
+          }
+          .organization-card .organization-mobile-title strong {
+            margin-top: 6px;
+            color: #234e52;
+            font-size: 21px;
+            font-weight: 650;
+            line-height: 1.2;
+          }
+          .organization-card .organization-mobile-title .autosave-indicator {
+            margin-top: 11px;
+            max-width: 100%;
+            border: 1px solid #d8e1e1;
+            background: #e9eeee;
+            color: #667b7d;
+            font-size: 12px;
+          }
+          .organization-card.organization-tone-saving .organization-mobile-title .autosave-indicator {
+            border-color: #e9d59d;
+            background: #ffefc4;
+            color: #81601d;
+          }
+          .organization-card.organization-tone-saved .organization-mobile-title .autosave-indicator {
+            border-color: #b6dec4;
+            background: #d7f0df;
+            color: #247347;
+          }
+          .organization-card .organization-mobile-chevron {
+            width: 22px;
+            height: 22px;
+            flex: 0 0 22px;
+            color: #648b8b;
+            transition: transform .2s ease;
+          }
+          .organization-card .organization-mobile-chevron.is-expanded {
+            transform: rotate(180deg);
+          }
+          .organization-card .organization-card-body.is-collapsed { display: none; }
+          .organization-card .organization-card-body:not(.is-collapsed) {
+            margin-top: 15px;
+            padding-top: 16px;
+            border-top: 1px solid rgba(80,120,115,.20);
+          }
+          .organization-card .organization-card-body > label {
+            margin-top: 0;
+            font-size: 14px;
+          }
+          .organization-card .organization-card-body textarea {
+            background: #fff;
+            font-size: 16px;
+          }
+          .organization-card .organization-approval-note {
+            margin-top: 7px;
+            font-size: 11px;
+            color: #637d7b;
+          }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .organization-card .organization-mobile-chevron { transition: none; }
+        }
+      `}</style>
       <section className="report-intro organization-intro">
         <div>
           <span className="section-kicker">Informe mensual · {weekLabel(monthStart)}</span>
@@ -1166,19 +1316,66 @@ function OrganizationReportView({
       </section>
       <section className="organization-grid">
         {data.wards.map((ward) => {
-          const existing = data.organizationReports.find((item) => item.wardId === ward.id && item.monthStart === monthStart && item.organization === organization);
+          const existing = data.organizationReports.find((item) =>
+            item.wardId === ward.id && item.monthStart === monthStart && item.organization === organization
+          );
+          const key = `${scopeKey}:${ward.id}`;
+          const observation = locallyEdited.current.has(key)
+            ? (latestDrafts.current[key] ?? drafts[ward.id] ?? "")
+            : (drafts[ward.id] ?? existing?.observation ?? "");
+          const state = saveStates[key];
+          const hasComments = observation.trim().length > 0;
+          const isBusy = state === "saving" || state === "error";
+          const tone = isBusy ? "saving" : hasComments ? "saved" : "empty";
+          const stateLabel = state === "saving"
+            ? "Guardando cambios…"
+            : state === "error"
+              ? "No se pudo guardar"
+              : hasComments
+                ? "Cambios guardados"
+                : "Sin comentarios";
+          const expanded = expandedWardId === ward.id;
           return (
-          <article className="panel organization-card" key={ward.id}>
-            <div className="organization-card-heading">
-              <div><span className="section-kicker">Barrio</span><h3>{ward.name}</h3></div>
-              <span className={`autosave-indicator ${savingWard === ward.id ? "saving" : savedWard === ward.id ? "saved" : ""}`}>
-                {savingWard === ward.id ? "Guardando…" : savedWard === ward.id ? "Guardado · pendiente" : existing?.approvalStatus === "approved" ? "Aprobado" : existing ? "Pendiente de aprobación" : "Automático"}
-              </span>
-            </div>
-            <label htmlFor={`organization-${ward.id}`}>Observación del mes</label>
-            <Textarea id={`organization-${ward.id}`} value={drafts[ward.id] ?? ""} maxLength={TEXT_LIMIT} onChange={(event) => updateObservation(ward.id, event.target.value)} placeholder={`Escribe lo observado por ${organizationLabels[organization]} en ${ward.name}…`} rows={5} />
-            <CharacterCount value={drafts[ward.id] ?? ""} />
-          </article>
+            <article className={`panel organization-card organization-tone-${tone}`} key={ward.id}>
+              {/* Vista de escritorio: los informes permanecen abiertos. */}
+              <div className="organization-card-heading organization-desktop-heading">
+                <div><span className="section-kicker">Barrio</span><h3>{ward.name}</h3></div>
+                <span className={`autosave-indicator ${tone}`}>{stateLabel}</span>
+              </div>
+              {/* Vista móvil: un solo barrio abierto, con semáforo visible incluso cerrado. */}
+              <button
+                type="button"
+                className="organization-mobile-toggle"
+                aria-expanded={expanded}
+                aria-controls={`organization-panel-${ward.id}`}
+                onClick={() => setExpandedWard({ key: scopeKey, wardId: expanded ? null : ward.id })}
+              >
+                <span className="organization-mobile-title">
+                  <span className="section-kicker">Barrio</span>
+                  <strong>{ward.name}</strong>
+                  <span className={`autosave-indicator ${tone}`} aria-live="polite">{stateLabel}</span>
+                  {hasComments && existing?.approvalStatus === "approved" &&
+                    <span className="organization-approval-note">Aprobado por Estaca</span>}
+                </span>
+                <ChevronDown className={`organization-mobile-chevron ${expanded ? "is-expanded" : ""}`} aria-hidden="true" />
+              </button>
+              <div
+                id={`organization-panel-${ward.id}`}
+                className={`organization-card-body ${expanded ? "" : "is-collapsed"}`}
+              >
+                <label htmlFor={`organization-${ward.id}`}>Observación del mes</label>
+                <Textarea
+                  id={`organization-${ward.id}`}
+                  value={observation}
+                  maxLength={TEXT_LIMIT}
+                  onChange={(event) => updateObservation(ward.id, event.target.value)}
+                  placeholder={`Escribe lo observado por ${organizationLabels[organization]} en ${ward.name}…`}
+                  rows={5}
+                  autoComplete="off"
+                />
+                <CharacterCount value={observation} />
+              </div>
+            </article>
           );
         })}
       </section>

@@ -1,0 +1,31 @@
+INFORME ESTACA ÑUÑOA - BARRIOS DESPLEGABLES + SEMÁFORO
+
+En celular (ancho menor o igual a 760 px):
+- GRIS CLARO: el barrio no tiene comentarios.
+- AMARILLO CLARO: se están guardando cambios (o falló el guardado; aparece aviso).
+- VERDE CLARO: los comentarios ya fueron guardados correctamente.
+- Cada barrio es desplegable; solo uno queda abierto a la vez.
+- Los colores y el texto del estado se ven también con la tarjeta cerrada.
+- Cambiar de barrio no cancela el guardado automático.
+- En computador se mantienen visibles todas las observaciones.
+- Guardado y aprobación son cosas distintas; 'Aprobado por Estaca' se indica aparte.
+
+INSTRUCCIONES WINDOWS:
+1) Extrae el ZIP completo.
+2) Haz doble clic en CREAR_ARCHIVO_GITHUB.bat. Requiere Python 3 y conexión a Internet.
+3) Se genera LISTO_PARA_GITHUB/app/portal-client.tsx (archivo COMPLETO).
+4) En https://github.com/WillzkottDev/informe-sumo-consejo/tree/main/app,
+   reemplaza portal-client.tsx por el archivo generado, y confirma el commit.
+5) Espera la actualización normal de tu sitio.
+
+SI YA HICISTE LOS DESPLEGABLES DEL ZIP ANTERIOR:
+Este generador sirve igualmente, porque reemplaza exclusivamente el componente
+OrganizationReportView por la nueva versión y conserva la navegación existente.
+
+SI TIENES UNA COPIA DEL PROYECTO EN TU COMPUTADOR:
+  python GENERAR_REEMPLAZO.py --origen RUTA\\app\\portal-client.tsx
+
+IMPORTANTE:
+La conexión de esta sesión a GitHub permite leer, pero no escribir (403).
+No se ha modificado el repositorio remoto. Este ZIP genera el archivo para que
+lo reemplaces directamente.
