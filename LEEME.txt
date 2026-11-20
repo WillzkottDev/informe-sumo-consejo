@@ -1,31 +1,65 @@
-INFORME ESTACA ÑUÑOA - BARRIOS DESPLEGABLES + SEMÁFORO
+INFORMES ESTACA ÑUÑOA
+Publicación de comentarios, mensajes a la presidencia y notas de consejo
 
-En celular (ancho menor o igual a 760 px):
-- GRIS CLARO: el barrio no tiene comentarios.
-- AMARILLO CLARO: se están guardando cambios (o falló el guardado; aparece aviso).
-- VERDE CLARO: los comentarios ya fueron guardados correctamente.
-- Cada barrio es desplegable; solo uno queda abierto a la vez.
-- Los colores y el texto del estado se ven también con la tarjeta cerrada.
-- Cambiar de barrio no cancela el guardado automático.
-- En computador se mantienen visibles todas las observaciones.
-- Guardado y aprobación son cosas distintas; 'Aprobado por Estaca' se indica aparte.
+ACTUALIZAR LA APLICACIÓN EXISTENTE
 
-INSTRUCCIONES WINDOWS:
-1) Extrae el ZIP completo.
-2) Haz doble clic en CREAR_ARCHIVO_GITHUB.bat. Requiere Python 3 y conexión a Internet.
-3) Se genera LISTO_PARA_GITHUB/app/portal-client.tsx (archivo COMPLETO).
-4) En https://github.com/WillzkottDev/informe-sumo-consejo/tree/main/app,
-   reemplaza portal-client.tsx por el archivo generado, y confirma el commit.
-5) Espera la actualización normal de tu sitio.
+1. Extrae el ZIP. En esta carpeta están el proyecto y la versión compilada del
+   Worker, en dist/. Conserva tu configuración de dominio y la base D1 actual.
 
-SI YA HICISTE LOS DESPLEGABLES DEL ZIP ANTERIOR:
-Este generador sirve igualmente, porque reemplaza exclusivamente el componente
-OrganizationReportView por la nueva versión y conserva la navegación existente.
+2. Antes de desplegar el portal, abre la base D1 sumo-consejo-db en Cloudflare.
+   Si ya aplicaste la actualización de mensajes y notas (0005), ejecuta solo
+   drizzle/0006_publicacion_comentarios.sql. Si tu base está en la versión
+   anterior a mensajes y notas (0004), ejecuta primero 0005 y después 0006.
+   Puedes pegar el contenido de cada archivo en la consola de la base o usar
+   estos comandos desde la carpeta del proyecto con tu cuenta habitual.
 
-SI TIENES UNA COPIA DEL PROYECTO EN TU COMPUTADOR:
-  python GENERAR_REEMPLAZO.py --origen RUTA\\app\\portal-client.tsx
+   npx wrangler d1 execute DB --remote --config dist/server/wrangler.json --file drizzle/0005_presidencia_y_consejo.sql
+   npx wrangler d1 execute DB --remote --config dist/server/wrangler.json --file drizzle/0006_publicacion_comentarios.sql
 
-IMPORTANTE:
-La conexión de esta sesión a GitHub permite leer, pero no escribir (403).
-No se ha modificado el repositorio remoto. Este ZIP genera el archivo para que
-lo reemplaces directamente.
+   Ambas actualizaciones crean tablas adicionales y admiten repetición. Se
+   conservan los informes, los usuarios y las aprobaciones de organizaciones.
+
+3. Actualiza el proyecto en el mismo repositorio y mediante el mismo despliegue
+   que usas para este portal. Si publicas el Worker precompilado, usa dist/server
+   y dist/client de esta entrega como un conjunto. El archivo
+   dist/server/wrangler.json conserva la conexión a la base existente.
+   En Windows, CREAR_ARCHIVO_GITHUB.bat prepara los archivos de esta actualización
+   en LISTO_PARA_GITHUB para copiarlos a tu repositorio.
+
+4. Ingresa como informante y abre Mensaje directo a la presidencia. En otra
+   sesión de Administración, abre Mensajes a la presidencia, destaca una frase y
+   revisa el resultado en Notas para consejo de estaca para el mismo mes.
+
+5. Desde Aprobaciones, elige el mes, busca el aporte por barrio y pulsa
+   Aprobar y publicar. Cada observación del Sumo Consejo se publica por
+   separado. Los informes anteriores que solo constaban como enviados están
+   disponibles para revisión. Las publicaciones aparecen en Consulta de
+   informes y en Historial. Editar el texto requiere una nueva aprobación.
+
+QUIÉN PUEDE CONSULTAR UNA PUBLICACIÓN
+
+• Las organizaciones ven los comentarios publicados de los sumos y de todas
+  las organizaciones en todos los barrios activos de la estaca.
+• Cada sumo ve los comentarios publicados de ambos orígenes en los barrios
+  que tiene asignados. Puede continuar su propio informe en Informe mensual.
+• Administración ve también los pendientes y puede retirar una publicación.
+  Los mensajes directos y las notas para el consejo son privados.
+
+USO POR PERFIL
+
+• Sumo Consejo y organizaciones pueden elegir Comentario, Enfoque o Solicitud
+  de apoyo, escribir un mensaje y revisar sus propios envíos en el mes elegido.
+• Administración recibe los mensajes en una bandeja común. Destacar permite
+  llevar el texto completo o una frase a la tabla de notas. También está
+  disponible en los comentarios guardados de organizaciones y en los informes
+  enviados del Sumo Consejo.
+• La tabla muestra el perfil de origen, la persona, el barrio cuando corresponde,
+  la sección de origen y la frase guardada. Quitar de las notas la retira para
+  todos los administradores. El informe conserva su publicación y su texto.
+• Manual de ayuda ofrece búsqueda, preguntas desplegables y accesos a las
+  tareas disponibles para el perfil que inició sesión.
+
+En celular se conserva el semáforo del formulario de organización. Gris indica
+un barrio sin comentarios, amarillo identifica un guardado en curso o pendiente
+de revisión por un error y verde señala que el texto se guardó. La aprobación
+de estaca aparece por separado.

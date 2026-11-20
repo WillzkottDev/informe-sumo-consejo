@@ -17,7 +17,8 @@ import {
   Gauge,
   HelpCircle,
   LayoutDashboard,
-  LockKeyhole,
+  Mail,
+  NotebookPen,
   LogOut,
   Menu,
   Plus,
@@ -72,9 +73,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Toaster } from "@/components/ui/sonner";
 
+import { councilFields, councilFieldKeys, organizationLabels, TEXT_LIMIT, type CouncilField, type OrganizationScope, type ReportScope } from "@/lib/stake-council";
+import { CouncilNotesProvider, CouncilNotesView, HighlightButton, PresidencyView } from "@/app/presidency";
+import { HelpView } from "@/app/portal-help";
+
 type Ward = { id: number; name: string; active: boolean; createdAt: string };
-type OrganizationScope = "primary" | "relief_society" | "young_women" | "young_men" | "jas" | "single_adults" | "temple_family_history" | "missionary_work" | "self_reliance" | "seminary" | "sunday_school";
-type ReportScope = "high_council" | OrganizationScope;
 type Member = {
   id: number;
   email: string;
@@ -120,6 +123,17 @@ type Report = {
   submittedAt: string | null;
   updatedAt: string;
 };
+type PublishedCouncilComment = {
+  reportId: number;
+  field: CouncilField;
+  text: string;
+  wardId: number;
+  wardName: string;
+  monthStart: string;
+  reporterName: string;
+  approvedAt: string;
+};
+
 type PortalData = {
   currentMember: {
     id: number;
@@ -131,6 +145,8 @@ type PortalData = {
   };
   wards: Ward[];
   reports: Report[];
+  publishedCouncilComments: PublishedCouncilComment[];
+  occupiedSlots: { wardId: number; monthStart: string }[];
   organizationReports: OrganizationReport[];
   members: Member[];
   assignments: Assignment[];
@@ -194,23 +210,6 @@ function weekLabel(week: string, includeYear = true) {
   }).format(new Date(`${week}T00:00:00Z`));
 }
 
-const organizationLabels: Record<ReportScope, string> = {
-  primary: "Primaria",
-  relief_society: "Sociedad de Socorro",
-  young_women: "Mujeres Jóvenes",
-  young_men: "Hombres Jóvenes",
-  high_council: "Sumo Consejo",
-  jas: "Jóvenes Adultos Solteros (JAS)",
-  single_adults: "Adultos Solteros (AS)",
-  temple_family_history: "Templo e Historia Familiar",
-  missionary_work: "Obra Misional",
-  self_reliance: "Autosuficiencia",
-  seminary: "Seminario",
-  sunday_school: "Escuela Dominical",
-};
-
-const TEXT_LIMIT = 5000;
-
 function CharacterCount({ value }: { value: string }) {
   return <span className="character-count" aria-live="polite">{value.length.toLocaleString("es-CL")} / {TEXT_LIMIT.toLocaleString("es-CL")}</span>;
 }
@@ -269,7 +268,13 @@ export function PortalClient() {
   const [form, setForm] = useState<ReportForm>({ ...EMPTY_FORM, weekStart });
   const [saving, setSaving] = useState(false);
   const [autoSaveState, setAutoSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const reportEdited = useRef(false);
+  const editRevision = useRef(0);
+  const formScope = useRef("");
+  const readRevision = useRef(0);
+  const draftWrite = useRef<Promise<unknown>>(Promise.resolve());
   const [mobileNav, setMobileNav] = useState(false);
+  const [openedWard, setOpenedWard] = useState<number | null>(null);
 
   const weekOptions = useMemo(
     () =>
@@ -278,10 +283,12 @@ export function PortalClient() {
   );
 
   const refresh = useCallback(async () => {
+    const revision = ++readRevision.current;
     try {
       setLoadError("");
       const response = await fetch("/api/portal", { cache: "no-store" });
       const payload = (await responseJson(response)) as unknown as PortalData;
+      if (readRevision.current !== revision) return;
       setData(payload);
       setSelectedWardId((current) =>
         payload.wards.some((ward) => ward.id === current)
@@ -289,17 +296,18 @@ export function PortalClient() {
           : (payload.wards[0]?.id ?? 0),
       );
       if (payload.currentMember.role !== "admin") {
-        setActiveView((view) => (view === "stake" || view === "admin" ? "report" : view));
+        setActiveView((view) => (["stake", "admin", "approvals", "council-notes"].includes(view) ? "report" : view));
       } else {
         setActiveView((view) => (view === "report" ? "stake" : view));
       }
     } catch (error) {
+      if (readRevision.current !== revision) return;
       if (error instanceof Error && (error as Error & { status?: number }).status === 401) {
         setAuthRequired(true);
       }
       setLoadError(error instanceof Error ? error.message : "No fue posible cargar el portal.");
     } finally {
-      setLoading(false);
+      if (readRevision.current === revision) setLoading(false);
     }
   }, []);
 
@@ -308,7 +316,26 @@ export function PortalClient() {
   }, [refresh]);
 
   useEffect(() => {
+    if (activeView !== "shared" && activeView !== "history") return;
+    const updateReadingView = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    updateReadingView();
+    const timer = window.setInterval(updateReadingView, 30000);
+    document.addEventListener("visibilitychange", updateReadingView);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", updateReadingView);
+    };
+  }, [activeView, refresh]);
+
+  useEffect(() => {
     if (!data) return;
+    const scope = `${data.currentMember.id}:${selectedWardId}:${weekStart}`;
+    if (formScope.current === scope && reportEdited.current) return;
+    formScope.current = scope;
+    editRevision.current++;
+    reportEdited.current = false;
     const existing = data.reports.find(
       (report) => report.wardId === selectedWardId && report.weekStart === weekStart,
     );
@@ -343,22 +370,29 @@ export function PortalClient() {
   }, []);
 
   useEffect(() => {
-    if (!data || !selectedWardId || data.currentMember.reportScope !== "high_council") return;
+    if (!reportEdited.current || !data || data.currentMember.role === "admin" || !selectedWardId || data.currentMember.reportScope !== "high_council") return;
     const existing = data.reports.find((report) => report.wardId === selectedWardId && report.weekStart === weekStart);
     const comparable = { ...form, wardId: selectedWardId, weekStart, status: "draft" as const };
     const stored = existing ? {
       wardId: existing.wardId, weekStart: existing.weekStart, status: "draft" as const,
-      sacramentalObservation: existing.sacramentalObservation, punctualityState: existing.punctualityState, punctualityNote: "",
-      wardCouncilObservation: existing.wardCouncilObservation, followupState: existing.followupState, followupNote: "",
+      sacramentalObservation: existing.sacramentalObservation, punctualityState: existing.punctualityState, punctualityNote: existing.punctualityNote,
+      wardCouncilObservation: existing.wardCouncilObservation, followupState: existing.followupState, followupNote: existing.followupNote,
       missionaryObservation: existing.missionaryObservation, otherObservation: existing.otherObservation,
-      scheduleState: existing.scheduleState, scheduleNote: "",
+      scheduleState: existing.scheduleState, scheduleNote: existing.scheduleNote,
     } : { ...EMPTY_FORM, wardId: selectedWardId, weekStart };
     if (JSON.stringify(comparable) === JSON.stringify(stored)) return;
+    const revision = editRevision.current;
     setAutoSaveState("saving");
     const timer = window.setTimeout(async () => {
+      if (!reportEdited.current) return;
       try {
-        await post({ action: "save_report", ...form, wardId: selectedWardId, weekStart, status: "draft" });
-        setAutoSaveState("saved");
+        draftWrite.current = draftWrite.current.catch(() => undefined).then(() =>
+          post({ action: "save_report", ...form, wardId: selectedWardId, weekStart, status: "draft" }));
+        await draftWrite.current;
+        if (editRevision.current === revision) {
+          reportEdited.current = false;
+          setAutoSaveState("saved");
+        }
       } catch (error) {
         setAutoSaveState("idle");
         toast.error(error instanceof Error ? error.message : "No fue posible guardar automáticamente.");
@@ -386,6 +420,18 @@ export function PortalClient() {
     await post({ action: "logout" });
     window.location.reload();
   };
+
+  const openReport = useCallback((wardId: number, week: string) => {
+    setSelectedWardId(wardId);
+    setWeekStart(week);
+    if (data?.currentMember.role === "admin") {
+      setOpenedWard(wardId);
+      setActiveView("shared");
+    } else {
+      setActiveView("report");
+    }
+    setMobileNav(false);
+  }, [data?.currentMember.role]);
 
   useEffect(() => {
     const modelContext = (
@@ -421,9 +467,7 @@ export function PortalClient() {
             if (!candidate.weekStart || !/^\d{4}-\d{2}-\d{2}$/.test(candidate.weekStart)) {
               throw new Error("Mes no válida");
             }
-            setSelectedWardId(candidate.wardId!);
-            setWeekStart(candidate.weekStart);
-            setActiveView("report");
+            openReport(candidate.wardId!, candidate.weekStart);
             return { opened: true, wardId: candidate.wardId, weekStart: candidate.weekStart };
           },
         },
@@ -432,12 +476,14 @@ export function PortalClient() {
     };
     void register().catch(() => undefined);
     return () => lifecycle.abort();
-  }, [data]);
+  }, [data, openReport]);
 
   const saveReport = async (status: "draft" | "submitted") => {
     if (!selectedWardId) return;
+    reportEdited.current = false;
     setSaving(true);
     try {
+      await draftWrite.current.catch(() => undefined);
       await post({ action: "save_report", ...form, wardId: selectedWardId, weekStart, status });
       toast.success(status === "submitted" ? "Informe enviado a la Estaca" : "Borrador guardado");
       await refresh();
@@ -448,10 +494,9 @@ export function PortalClient() {
     }
   };
 
-  const openReport = (wardId: number, week: string) => {
-    setSelectedWardId(wardId);
-    setWeekStart(week);
-    setActiveView("report");
+  const navigate = (view: string) => {
+    setOpenedWard(null);
+    setActiveView(view);
     setMobileNav(false);
   };
 
@@ -478,8 +523,10 @@ export function PortalClient() {
     ...(!isAdmin ? [{ value: "report", label: data.currentMember.reportScope === "high_council" ? "Informe mensual" : "Informe de organización", icon: FilePenLine }] : []),
     { value: "shared", label: "Consulta de informes", icon: BookOpenCheck },
     ...(isAdmin ? [{ value: "approvals", label: "Aprobaciones", icon: ShieldCheck }] : []),
+    { value: "presidency", label: isAdmin ? "Mensajes a la presidencia" : "Mensaje directo a la presidencia", icon: Mail },
+    ...(isAdmin ? [{ value: "council-notes", label: "Notas para consejo de estaca", icon: NotebookPen }] : []),
     { value: "history", label: "Historial", icon: FileClock },
-    ...(!isAdmin ? [{ value: "help", label: "Manual de ayuda", icon: HelpCircle }] : []),
+    { value: "help", label: "Manual de ayuda", icon: HelpCircle },
     ...(isAdmin
       ? [{ value: "admin", label: "Administración", icon: Settings2 }]
       : []),
@@ -491,26 +538,24 @@ export function PortalClient() {
     history: { eyebrow: "Seguimiento", title: "Historial de informes" },
     shared: { eyebrow: isAdmin ? "Lectura integrada" : "Información autorizada", title: "Consulta por barrio" },
     approvals: { eyebrow: "Revisión de Estaca", title: "Aprobaciones" },
+    presidency: { eyebrow: isAdmin ? "Administración de estaca" : "Canal privado", title: isAdmin ? "Mensajes a la presidencia" : "Mensaje directo a la presidencia" },
+    "council-notes": { eyebrow: "Administración de estaca", title: "Notas para consejo de estaca" },
     help: { eyebrow: "Orientación", title: "Manual de ayuda" },
     admin: { eyebrow: "Configuración", title: "Barrios y accesos" },
   };
   const title = viewTitles[activeView] ?? viewTitles.report;
 
   return (
+    <CouncilNotesProvider key={data.currentMember.id} isAdmin={isAdmin} month={weekStart} view={activeView}>
     <Tabs
       value={activeView}
-      onValueChange={(value) => {
-        setActiveView(value);
-        setMobileNav(false);
-      }}
+      onValueChange={navigate}
       orientation="vertical"
       className="portal-shell"
     >
       <aside className={`portal-sidebar ${mobileNav ? "is-open" : ""}`}>
         <div className="brand-lockup">
-          <div className="brand-mark" aria-hidden="true">
-            <span>EÑ</span>
-          </div>
+          <StakeLogo />
           <div>
             <strong>Estaca Ñuñoa</strong>
             <span>Seguimiento de Estaca</span>
@@ -557,7 +602,7 @@ export function PortalClient() {
       {mobileNav && <button className="nav-backdrop" onClick={() => setMobileNav(false)} />}
 
       <section className="portal-content">
-        <header className="portal-header">
+        <header className={`portal-header${["presidency", "council-notes"].includes(activeView) ? " private-header" : ""}`}>
           <div className="header-title">
             <Button
               variant="ghost"
@@ -609,7 +654,7 @@ export function PortalClient() {
               selectedWardId={selectedWardId}
               setSelectedWardId={setSelectedWardId}
               form={form}
-              setForm={setForm}
+              setForm={(update) => { editRevision.current++; reportEdited.current = true; setForm(update); }}
               saving={saving}
               onSave={saveReport}
               autoSaveState={autoSaveState}
@@ -619,9 +664,13 @@ export function PortalClient() {
           <TabsContent value="history">
             <HistoryView data={data} onOpenReport={openReport} post={post} refresh={refresh} />
           </TabsContent>
-          {!isAdmin && <TabsContent value="help"><HelpView data={data} /></TabsContent>}
-          <TabsContent value="shared"><SharedInformationView data={data} monthStart={weekStart} /></TabsContent>
-          {isAdmin && <TabsContent value="approvals"><OrganizationApprovalPanel data={data} monthStart={weekStart} post={post} refresh={refresh} /></TabsContent>}
+          <TabsContent value="help"><HelpView isAdmin={isAdmin} scope={data.currentMember.reportScope}
+            assignedWards={data.wards.filter((ward) => data.currentAssignmentWardIds.includes(ward.id)).map((ward) => ward.name)}
+            navigate={navigate} /></TabsContent>
+          <TabsContent value="presidency"><PresidencyView isAdmin={isAdmin} month={weekStart} /></TabsContent>
+          {isAdmin && <TabsContent value="council-notes"><CouncilNotesView /></TabsContent>}
+          <TabsContent value="shared"><SharedInformationView key={openedWard ?? "all"} data={data} monthStart={weekStart} initialWard={openedWard} /></TabsContent>
+          {isAdmin && <TabsContent value="approvals"><ApprovalPanel data={data} monthStart={weekStart} post={post} refresh={refresh} /></TabsContent>}
           {isAdmin && (
             <TabsContent value="admin">
               <AdminView data={data} refresh={refresh} post={post} />
@@ -633,41 +682,22 @@ export function PortalClient() {
       </section>
       <Toaster position="top-right" richColors />
     </Tabs>
+    </CouncilNotesProvider>
   );
+}
+
+function StakeLogo() {
+  return <img className="stake-logo" src="/logo-estaca.png" width={60} height={88} alt="Estaca Ñuñoa" />;
 }
 
 function PortalLoading() {
   return (
     <div className="portal-loading">
-      <div className="brand-mark"><span>EÑ</span></div>
+      <StakeLogo />
       <div className="loading-line" />
       <p>Preparando el resumen mensual…</p>
     </div>
   );
-}
-
-function HelpView({ data }: { data: PortalData }) {
-  const isHighCouncil = data.currentMember.reportScope === "high_council";
-  const steps = isHighCouncil
-    ? [
-        ["Selecciona el mes y el barrio", "Solo aparecerán los barrios que la administración te haya asignado."],
-        ["Completa el informe mensual", "Escribe únicamente situaciones relevantes en Reunión Sacramental, Consejo de Barrio, Obra Misional y Templo, u Otros enfoques."],
-        ["Revisa los puntos obligatorios", "En cada punto rojo selecciona Sin novedad, Destacable o Requiere atención."],
-        ["Envía el informe", "Los textos se guardan automáticamente, pero debes pulsar Enviar informe para dejarlo formalmente registrado."],
-        ["Consulta información del barrio", "En Consulta de informes puedes leer los aportes aprobados de las organizaciones de tus barrios."],
-      ]
-    : [
-        ["Selecciona el mes", `El formulario corresponde exclusivamente a ${organizationLabels[data.currentMember.reportScope]}.`],
-        ["Informa por cada barrio", "Escribe en cada tarjeta únicamente lo importante ocurrido durante el mes."],
-        ["Espera el guardado automático", "El estado Guardado · pendiente confirma que la información llegó para revisión."],
-        ["Aprobación de Estaca", "La información no será visible para otros usuarios hasta que un administrador la revise y publique."],
-        ["Consulta e historial", "Podrás consultar información aprobada de tu organización en los barrios que tengas autorizados."],
-      ];
-  return <div className="view-stack help-view">
-    <section className="history-heading"><div><span className="section-kicker">Guía según tu perfil</span><h2>{isHighCouncil ? "Sumo Consejo asignado" : organizationLabels[data.currentMember.reportScope]}</h2><p>Pasos básicos para ingresar y consultar información correctamente.</p></div><Badge variant="outline"><HelpCircle /> Ayuda</Badge></section>
-    <section className="help-grid">{steps.map(([title, description], index) => <article className="panel help-card" key={title}><span>{String(index + 1).padStart(2, "0")}</span><div><h3>{title}</h3><p>{description}</p></div></article>)}</section>
-    <section className="panel help-note"><ShieldCheck /><div><strong>Privacidad de la información</strong><p>Solo puedes consultar información según tu perfil y los barrios que te fueron asignados. Si necesitas otro barrio, solicítalo a la administración de Estaca.</p></div></section>
-  </div>;
 }
 
 function LoginScreen({ busy, onLogin }: { busy: boolean; onLogin: (username: string, password: string) => Promise<void> }) {
@@ -686,9 +716,10 @@ function LoginScreen({ busy, onLogin }: { busy: boolean; onLogin: (username: str
   return (
     <main className="access-page">
       <form className="access-card login-card" onSubmit={submit}>
-        <div className="access-icon"><LockKeyhole /></div>
-        <span className="access-eyebrow">Portal privado</span>
-        <h1>Informes Estaca Ñuñoa</h1>
+        <div className="login-brand"><StakeLogo /><div>
+          <span className="access-eyebrow">Portal privado</span>
+          <h1>Informes Estaca Ñuñoa</h1>
+        </div></div>
         <p>Ingresa con tu usuario asignado para registrar el informe de tu barrio o revisar el consolidado de Estaca.</p>
         <div className="dialog-field login-field"><label htmlFor="login-username">Usuario</label><Input id="login-username" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Tu usuario" autoFocus /></div>
         <div className="dialog-field login-field"><label htmlFor="login-password">Contraseña</label><Input id="login-password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Tu contraseña" /></div>
@@ -747,7 +778,7 @@ function StakeSummary({
       <section className="stake-hero">
         <div className="hero-copy">
           <div className="eyebrow-pill"><CalendarDays /> {weekLabel(weekStart)}</div>
-          <h2>Una mes, toda la Estaca</h2>
+          <h2>Un mes, toda la Estaca</h2>
           <p>
             Estado de entrega y observaciones relevantes de todos los barrios en un solo lugar.
           </p>
@@ -822,17 +853,17 @@ function MetricCard({ icon, label, value, tone }: { icon: ReactNode; label: stri
 }
 
 function WeeklyDigest({ reports }: { reports: Report[] }) {
-  type DigestEntry = { ward: string; text: string; state?: ReportState };
+  type DigestEntry = { ward: string; text: string; state?: ReportState; id: number; field?: CouncilField };
   type DigestSection = { title: string; icon: typeof BookOpenCheck; entries: DigestEntry[] };
   const sections: DigestSection[] = [
     {
       title: "Reunión Sacramental",
       icon: BookOpenCheck,
       entries: reports.flatMap((report) => {
-        const rows: { ward: string; text: string; state?: ReportState }[] = [];
-        if (report.sacramentalObservation) rows.push({ ward: report.wardName, text: report.sacramentalObservation });
+        const rows: DigestEntry[] = [];
+        if (report.sacramentalObservation) rows.push({ id: report.id, field: "sacramentalObservation", ward: report.wardName, text: report.sacramentalObservation });
         if (report.punctualityState !== "sin_novedad" && report.punctualityState) {
-          rows.push({ ward: report.wardName, text: report.punctualityNote || "Puntualidad informada sin comentario.", state: report.punctualityState });
+          rows.push({ id: report.id, field: report.punctualityNote ? "punctualityNote" : undefined, ward: report.wardName, text: report.punctualityNote || "Puntualidad informada sin comentario.", state: report.punctualityState });
         }
         return rows;
       }),
@@ -841,10 +872,10 @@ function WeeklyDigest({ reports }: { reports: Report[] }) {
       title: "Consejo de Barrio",
       icon: Users,
       entries: reports.flatMap((report) => {
-        const rows: { ward: string; text: string; state?: ReportState }[] = [];
-        if (report.wardCouncilObservation) rows.push({ ward: report.wardName, text: report.wardCouncilObservation });
+        const rows: DigestEntry[] = [];
+        if (report.wardCouncilObservation) rows.push({ id: report.id, field: "wardCouncilObservation", ward: report.wardName, text: report.wardCouncilObservation });
         if (report.followupState !== "sin_novedad" && report.followupState) {
-          rows.push({ ward: report.wardName, text: report.followupNote || "Seguimiento informado sin comentario.", state: report.followupState });
+          rows.push({ id: report.id, field: report.followupNote ? "followupNote" : undefined, ward: report.wardName, text: report.followupNote || "Seguimiento informado sin comentario.", state: report.followupState });
         }
         return rows;
       }),
@@ -854,16 +885,16 @@ function WeeklyDigest({ reports }: { reports: Report[] }) {
       icon: Gauge,
       entries: reports
         .filter((report) => report.missionaryObservation)
-        .map((report) => ({ ward: report.wardName, text: report.missionaryObservation })),
+        .map((report) => ({ id: report.id, field: "missionaryObservation", ward: report.wardName, text: report.missionaryObservation })),
     },
     {
       title: "Otros enfoques",
       icon: Sparkles,
       entries: reports.flatMap((report) => {
-        const rows: { ward: string; text: string; state?: ReportState }[] = [];
-        if (report.otherObservation) rows.push({ ward: report.wardName, text: report.otherObservation });
+        const rows: DigestEntry[] = [];
+        if (report.otherObservation) rows.push({ id: report.id, field: "otherObservation", ward: report.wardName, text: report.otherObservation });
         if (report.scheduleState !== "sin_novedad" && report.scheduleState) {
-          rows.push({ ward: report.wardName, text: report.scheduleNote || "Horario dominical informado sin comentario.", state: report.scheduleState });
+          rows.push({ id: report.id, field: report.scheduleNote ? "scheduleNote" : undefined, ward: report.wardName, text: report.scheduleNote || "Horario dominical informado sin comentario.", state: report.scheduleState });
         }
         return rows;
       }),
@@ -875,7 +906,7 @@ function WeeklyDigest({ reports }: { reports: Report[] }) {
       <div className="panel-heading">
         <div>
           <span className="section-kicker">Consolidado de informes</span>
-          <h3>Resumen de la mes</h3>
+          <h3>Resumen del mes</h3>
         </div>
         <span className="muted-count">Solo puntos reportados</span>
       </div>
@@ -895,6 +926,7 @@ function WeeklyDigest({ reports }: { reports: Report[] }) {
                         {entry.state && <StatePill state={entry.state} />}
                       </div>
                       <p>{entry.text}</p>
+                      {entry.field && <HighlightButton source={{ type: "high_council", id: entry.id, field: entry.field }} text={entry.text} />}
                     </div>
                   ))}
                 </div>
@@ -951,6 +983,7 @@ function WeeklyReport({
     (report) => report.wardId === selectedWardId && report.weekStart === weekStart,
   );
   const ward = data.wards.find((item) => item.id === selectedWardId);
+  const occupied = data.occupiedSlots.some((slot) => slot.wardId === selectedWardId && slot.monthStart === weekStart);
   const update = <K extends keyof ReportForm>(key: K, value: ReportForm[K]) =>
     setForm((previous) => ({ ...previous, [key]: value }));
 
@@ -971,7 +1004,7 @@ function WeeklyReport({
         <div>
           <span className="section-kicker">Informe mensual · {weekLabel(weekStart)}</span>
           <h2>{ward?.name ?? "Selecciona un barrio"}</h2>
-          <p>Completa solo lo relevante. Los tres puntos en rojo son obligatorios.</p>
+          <p>{occupied ? "Otro informante ya registró el informe de este barrio y mes." : "Al enviar, Administración podrá revisar y publicar cada comentario por separado."}</p>
         </div>
         <div className="report-controls">
           <Select value={String(selectedWardId)} onValueChange={(value) => setSelectedWardId(Number(value))}>
@@ -985,10 +1018,11 @@ function WeeklyReport({
               {current.status === "submitted" ? <CheckCircle2 /> : <Save />}
               {current.status === "submitted" ? "Enviado" : "Borrador"}
             </Badge>
-          ) : <Badge variant="outline">Nuevo informe</Badge>}
+          ) : <Badge variant="outline">{occupied ? "Registrado" : "Nuevo informe"}</Badge>}
         </div>
       </section>
 
+      {occupied ? <p className="panel mini-empty">Los comentarios que publique Administración estarán en Consulta de informes.</p> : <>
       <div className="instruction-strip">
         <div><AlertCircle /></div>
         <p><strong>Formato simplificado:</strong> escribe solo lo relevante. Los cambios quedan guardados automáticamente; en los puntos obligatorios basta indicar “Sin novedad”.</p>
@@ -1052,6 +1086,7 @@ function WeeklyReport({
           <Button disabled={saving} onClick={() => onSave("submitted")}><Send /> {saving ? "Guardando…" : "Enviar informe"}</Button>
         </div>
       </footer>
+      </>}
     </div>
   );
 }
@@ -1203,7 +1238,7 @@ function OrganizationReportView({
         .organization-card .organization-card-body > label {
           display: block;
           margin: 17px 0 8px;
-          color: #496467;
+          color: var(--secondary-foreground);
           font-size: 12px;
           font-weight: 700;
         }
@@ -1237,7 +1272,7 @@ function OrganizationReportView({
             -webkit-tap-highlight-color: transparent;
           }
           .organization-card .organization-mobile-toggle:focus-visible {
-            outline: 2px solid #176b73;
+            outline: 2px solid var(--primary);
             outline-offset: 4px;
             border-radius: 8px;
           }
@@ -1249,7 +1284,7 @@ function OrganizationReportView({
           }
           .organization-card .organization-mobile-title strong {
             margin-top: 6px;
-            color: #234e52;
+            color: var(--foreground);
             font-size: 21px;
             font-weight: 650;
             line-height: 1.2;
@@ -1319,6 +1354,7 @@ function OrganizationReportView({
           const existing = data.organizationReports.find((item) =>
             item.wardId === ward.id && item.monthStart === monthStart && item.organization === organization
           );
+          const occupied = data.occupiedSlots.some((slot) => slot.wardId === ward.id && slot.monthStart === monthStart);
           const key = `${scopeKey}:${ward.id}`;
           const observation = locallyEdited.current.has(key)
             ? (latestDrafts.current[key] ?? drafts[ward.id] ?? "")
@@ -1327,7 +1363,7 @@ function OrganizationReportView({
           const hasComments = observation.trim().length > 0;
           const isBusy = state === "saving" || state === "error";
           const tone = isBusy ? "saving" : hasComments ? "saved" : "empty";
-          const stateLabel = state === "saving"
+          const stateLabel = occupied ? "En revisión" : state === "saving"
             ? "Guardando cambios…"
             : state === "error"
               ? "No se pudo guardar"
@@ -1363,6 +1399,7 @@ function OrganizationReportView({
                 id={`organization-panel-${ward.id}`}
                 className={`organization-card-body ${expanded ? "" : "is-collapsed"}`}
               >
+                {occupied ? <p className="ward-summary-empty">Otro informante de tu organización tiene un aporte pendiente para este barrio y mes.</p> : <>
                 <label htmlFor={`organization-${ward.id}`}>Observación del mes</label>
                 <Textarea
                   id={`organization-${ward.id}`}
@@ -1374,6 +1411,8 @@ function OrganizationReportView({
                   autoComplete="off"
                 />
                 <CharacterCount value={observation} />
+                {hasComments && !isBusy && <small className="organization-approval-note">{existing?.approvalStatus === "approved" ? "Publicado por Administración" : "Pendiente de aprobación"}</small>}
+                </>}
               </div>
             </article>
           );
@@ -1383,42 +1422,63 @@ function OrganizationReportView({
   );
 }
 
-function SharedInformationView({ data, monthStart }: { data: PortalData; monthStart: string }) {
+function SharedInformationView({ data, monthStart, initialWard }: { data: PortalData; monthStart: string; initialWard: number | null }) {
   const isAdmin = data.currentMember.role === "admin";
   const isHighCouncil = data.currentMember.reportScope === "high_council";
-  const visibleWardIds = isAdmin ? data.wards.map((ward) => ward.id) : data.currentAssignmentWardIds;
-  const [wardFilter, setWardFilter] = useState("all");
+  const [wardFilter, setWardFilter] = useState(initialWard ? String(initialWard) : "all");
   const [sourceFilter, setSourceFilter] = useState("all");
-  const organizationRows = data.organizationReports.filter((item) =>
-    item.monthStart === monthStart &&
-    visibleWardIds.includes(item.wardId) &&
-    (isAdmin || item.approvalStatus === "approved") &&
-    (sourceFilter === "all" || item.organization === sourceFilter),
-  );
-  const councilRows = (isAdmin || isHighCouncil) && (sourceFilter === "all" || sourceFilter === "high_council")
-    ? data.reports.filter((item) => item.weekStart === monthStart && visibleWardIds.includes(item.wardId))
-    : [];
-  const selectedWardIds = wardFilter === "all" ? visibleWardIds : visibleWardIds.filter((id) => id === Number(wardFilter));
-  const availableOrganizations = Array.from(new Set(data.organizationReports.map((item) => item.organization)));
+  // The API already scopes the ward list to the signed-in profile.
+  const selectedWards = data.wards.filter((ward) => wardFilter === "all" || ward.id === Number(wardFilter));
+  const visibleOrganizations = data.organizationReports.filter((item) =>
+    item.monthStart === monthStart && (isAdmin || item.approvalStatus === "approved"));
+  const availableOrganizations = Array.from(new Set(visibleOrganizations.map((item) => item.organization)));
+  const includeCouncil = sourceFilter === "all" || sourceFilter === "high_council";
+  const published = data.publishedCouncilComments.filter((item) => item.monthStart === monthStart);
+  const publishedKeys = new Set(published.map((item) => `${item.reportId}-${item.field}`));
+  const councilComments = !includeCouncil ? [] : isAdmin
+    ? data.reports.filter((report) => report.weekStart === monthStart).flatMap((report) =>
+        councilFieldKeys.filter((field) => report[field].trim()).map((field) => ({
+          reportId: report.id, field, text: report[field], wardId: report.wardId, reporterName: report.reporterName,
+          date: report.updatedAt, submitted: report.status === "submitted",
+          status: publishedKeys.has(`${report.id}-${field}`)
+            ? "Publicado" : report.status === "submitted" ? "Pendiente" : "Borrador",
+        })))
+    : published.map((item) => ({ ...item, date: item.approvedAt, submitted: true, status: "Publicado" }));
+  const organizationRows = visibleOrganizations.filter((item) => sourceFilter === "all" || item.organization === sourceFilter);
+  const count = [...councilComments, ...organizationRows].filter((item) =>
+    wardFilter === "all" || item.wardId === Number(wardFilter)).length;
   return (
     <div className="view-stack shared-view">
       <section className="history-heading">
-        <div><span className="section-kicker">Vista consolidada · {weekLabel(monthStart)}</span><h2>Informes por barrio</h2><p>{isAdmin ? "Consulta toda la información de la Estaca por barrio y origen." : isHighCouncil ? "Consulta los informes y aportes aprobados de tus barrios asignados." : `Consulta la información aprobada de ${organizationLabels[data.currentMember.reportScope]} en tus barrios asignados.`}</p></div>
-        <Badge variant="outline"><ShieldCheck /> {organizationRows.length + councilRows.length} registros</Badge>
+        <div><span className="section-kicker">Vista consolidada · {weekLabel(monthStart)}</span><h2>Informes por barrio</h2><p>{isAdmin ? "Consulta toda la información de la Estaca por barrio y origen." : isHighCouncil ? "Lee los comentarios publicados del Sumo Consejo y de todas las organizaciones en tus barrios asignados." : "Lee los comentarios publicados del Sumo Consejo y de todas las organizaciones en los barrios de la estaca."}</p></div>
+        <Badge variant="outline"><ShieldCheck /> {count} {count === 1 ? "comentario" : "comentarios"}</Badge>
       </section>
       <section className="panel report-browser-controls">
-        <div><label>Barrio</label><Select value={wardFilter} onValueChange={setWardFilter}><SelectTrigger><Building2 /><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todos los barrios</SelectItem>{visibleWardIds.map((wardId) => { const ward = data.wards.find((item) => item.id === wardId); return ward ? <SelectItem key={ward.id} value={String(ward.id)}>{ward.name}</SelectItem> : null; })}</SelectContent></Select></div>
-        {(isAdmin || isHighCouncil) && <div><label>Tipo de información</label><Select value={sourceFilter} onValueChange={setSourceFilter}><SelectTrigger><BookOpenCheck /><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Toda la información</SelectItem><SelectItem value="high_council">Sumo Consejo</SelectItem>{availableOrganizations.map((organization) => <SelectItem key={organization} value={organization}>{organizationLabels[organization]}</SelectItem>)}</SelectContent></Select></div>}
+        <div><label>Barrio</label><Select value={wardFilter} onValueChange={setWardFilter}><SelectTrigger aria-label="Filtrar por barrio"><Building2 /><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todos los barrios</SelectItem>{data.wards.map((ward) => <SelectItem key={ward.id} value={String(ward.id)}>{ward.name}</SelectItem>)}</SelectContent></Select></div>
+        <div><label>Tipo de información</label><Select value={sourceFilter} onValueChange={setSourceFilter}><SelectTrigger aria-label="Filtrar por origen"><BookOpenCheck /><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Toda la información</SelectItem><SelectItem value="high_council">Sumo Consejo</SelectItem>{availableOrganizations.map((organization) => <SelectItem key={organization} value={organization}>{organizationLabels[organization]}</SelectItem>)}</SelectContent></Select></div>
       </section>
-      {visibleWardIds.length === 0 ? <section className="panel digest-empty"><Building2 /><p>Aún no tienes barrios asignados para consultar.</p></section> : (
+      {data.wards.length === 0 ? <section className="panel digest-empty"><Building2 /><p>{isHighCouncil && !isAdmin ? "Aún no tienes barrios asignados para consultar." : "Aún no hay barrios disponibles."}</p></section> : (
         <section className="shared-information-grid">
-          {selectedWardIds.map((wardId) => {
-            const ward = data.wards.find((item) => item.id === wardId);
+          {selectedWards.map((ward) => {
+            const wardId = ward.id;
             const organizations = organizationRows.filter((item) => item.wardId === wardId);
-            const council = councilRows.find((item) => item.wardId === wardId);
-            const councilComments = council ? [["Reunión Sacramental", council.sacramentalObservation], ["Consejo de Barrio", council.wardCouncilObservation], ["Obra Misional y Templo", council.missionaryObservation], ["Otros enfoques", council.otherObservation]].filter(([, text]) => text) : [];
-            const hasContent = organizations.length > 0 || councilComments.length > 0;
-            return <article className="panel shared-ward-card" key={wardId}><div className="admin-ward-title"><Building2 /><div><span>Barrio</span><h3>{ward?.name ?? "Barrio"}</h3></div></div>{hasContent ? <div className="ward-comment-list">{councilComments.map(([label, text]) => <div className="ward-comment" key={label}><strong>Sumo Consejo · {label}</strong><p>{text}</p><small>{council?.reporterName} · {dateTime(council?.updatedAt ?? null)}</small></div>)}{organizations.map((item) => <div className="ward-comment organization" key={item.id}><strong>{organizationLabels[item.organization]}{isAdmin && item.approvalStatus !== "approved" ? " · Pendiente" : ""}</strong><p>{item.observation}</p><small>{item.reporterName} · {dateTime(item.updatedAt)}</small></div>)}</div> : <p className="ward-summary-empty">No hay información disponible para este mes y filtro.</p>}</article>;
+            const comments = councilComments.filter((item) => item.wardId === wardId);
+            const hasContent = Boolean(organizations.length || comments.length);
+            return <article className="panel shared-ward-card" key={wardId}>
+              <div className="admin-ward-title"><Building2 /><div><span>Barrio</span><h3>{ward?.name ?? "Barrio"}</h3></div></div>
+              {hasContent ? <div className="ward-comment-list">
+                {comments.map((item) => <div className="ward-comment" key={`${item.reportId}-${item.field}`}>
+                  <strong>Sumo Consejo · {councilFields[item.field]}{isAdmin && ` · ${item.status}`}</strong><p>{item.text}</p>
+                  <small>{item.reporterName} · {dateTime(item.date)}</small>
+                  {isAdmin && item.submitted && <HighlightButton source={{ type: "high_council", id: item.reportId, field: item.field }} text={item.text} />}
+                </div>)}
+                {organizations.map((item) => <div className="ward-comment organization" key={item.id}>
+                  <strong>{organizationLabels[item.organization]}{isAdmin && item.approvalStatus !== "approved" ? " · Pendiente" : ""}</strong>
+                  <p>{item.observation}</p><small>{item.reporterName} · {dateTime(item.updatedAt)}</small>
+                  {isAdmin && <HighlightButton source={{ type: "organization", id: item.id, field: "observation" }} text={item.observation} />}
+                </div>)}
+              </div> : <p className="ward-summary-empty">No hay información disponible para este mes y filtro.</p>}
+            </article>;
           })}
         </section>
       )}
@@ -1435,6 +1495,7 @@ function HistoryView({ data, onOpenReport, post, refresh }: { data: PortalData; 
       (wardFilter === "all" || report.wardId === Number(wardFilter)) &&
       (statusFilter === "all" || report.status === statusFilter),
   );
+  const councilHistory = data.publishedCouncilComments.filter((item) => wardFilter === "all" || item.wardId === Number(wardFilter));
   const organizationHistory = data.organizationReports.filter((report) => wardFilter === "all" || report.wardId === Number(wardFilter));
   const removeReport = async (reportId: number, reportType: "high_council" | "organization") => {
     if (!window.confirm("¿Eliminar definitivamente este informe y su texto? Esta acción no se puede deshacer.")) return;
@@ -1477,6 +1538,13 @@ function HistoryView({ data, onOpenReport, post, refresh }: { data: PortalData; 
             </TableBody>
           </Table>
         ) : <div className="digest-empty"><FileClock /><p>No hay informes que coincidan con los filtros.</p></div>}
+      </section>}
+      {data.currentMember.role !== "admin" && <section className="panel organization-history-panel">
+        <div className="panel-heading"><div><span className="section-kicker">Sumo Consejo</span><h3>Comentarios publicados</h3></div><Badge variant="outline">{councilHistory.length}</Badge></div>
+        {councilHistory.length ? <div className="organization-history-list">{councilHistory.map((item) => (
+          <article key={`${item.reportId}-${item.field}`}><div><strong>{councilFields[item.field]}</strong><span>{item.wardName} · {weekLabel(item.monthStart)}</span></div>
+            <p>{item.text}</p><small>{item.reporterName} · {dateTime(item.approvedAt)}</small></article>
+        ))}</div> : <div className="mini-empty">Aún no hay comentarios publicados del Sumo Consejo para este filtro.</div>}
       </section>}
       <section className="panel organization-history-panel">
         <div className="panel-heading"><div><span className="section-kicker">Organizaciones</span><h3>Historial de informaciones</h3></div><Badge variant="outline">{organizationHistory.length} registros</Badge></div>
@@ -1521,16 +1589,16 @@ function AdminWardSummary({ data, monthStart }: { data: PortalData; monthStart: 
 function OrganizationReviewCard({ item, post, refresh }: { item: OrganizationReport; post: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>; refresh: () => Promise<void> }) {
   const [observation, setObservation] = useState(item.observation);
   const [busy, setBusy] = useState(false);
-  const [published, setPublished] = useState(false);
   const save = async (approvalStatus: "pending" | "approved") => {
     setBusy(true);
-    setPublished(false);
     try {
-      await post({ action: "review_organization_report", reportId: item.id, observation, approvalStatus });
+      await post({ action: "review_organization_report", reportId: item.id, observation, approvalStatus, previousObservation: item.observation, previousStatus: item.approvalStatus });
       toast.success(approvalStatus === "approved" ? "Información aprobada y publicada" : "Cambios guardados como pendientes");
-      setPublished(approvalStatus === "approved");
       await refresh();
-    } catch (error) { toast.error(error instanceof Error ? error.message : "No fue posible revisar la información."); }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No fue posible revisar la información.");
+      if ((error as { status?: number }).status === 409) await refresh();
+    }
     finally { setBusy(false); }
   };
   const remove = async () => {
@@ -1544,18 +1612,80 @@ function OrganizationReviewCard({ item, post, refresh }: { item: OrganizationRep
     finally { setBusy(false); }
   };
   return <article className={`review-card ${item.approvalStatus}`}>
-    <div className="review-card-heading"><div><span>{item.wardName}</span><h4>{organizationLabels[item.organization]}</h4><small>{item.reporterName} · {dateTime(item.updatedAt)}</small></div><Badge variant={item.approvalStatus === "approved" ? "default" : "secondary"}>{item.approvalStatus === "approved" ? "Aprobado" : "Pendiente"}</Badge></div>
-    <Textarea value={observation} maxLength={TEXT_LIMIT} onChange={(event) => { setObservation(event.target.value); setPublished(false); }} rows={4} aria-label={`Información de ${organizationLabels[item.organization]} para ${item.wardName}`} />
+    <div className="review-card-heading"><div><span>{item.wardName}</span><h4>{organizationLabels[item.organization]}</h4><small>{item.reporterName} · {dateTime(item.updatedAt)}</small></div><Badge variant={item.approvalStatus === "approved" ? "default" : "secondary"}>{item.approvalStatus === "approved" ? "Publicado" : "Pendiente"}</Badge></div>
+    <Textarea value={observation} maxLength={TEXT_LIMIT} onChange={(event) => setObservation(event.target.value)} rows={4} aria-label={`Información de ${organizationLabels[item.organization]} para ${item.wardName}`} />
     <CharacterCount value={observation} />
-    <div className="review-actions"><Button variant="ghost" className="danger-action" disabled={busy} onClick={() => void remove()}><Trash2 /> Eliminar</Button><Button variant="outline" disabled={busy} onClick={() => void save("pending")}><Save /> Guardar cambios</Button><Button disabled={busy || !observation.trim()} onClick={() => void save("approved")}><CheckCircle2 /> Aprobar y publicar</Button></div>
-    {published && <small className="published-confirmation"><CheckCircle2 /> ¡Publicado!</small>}
+    {item.observation.trim() && <div className="review-highlight">
+      <HighlightButton source={{ type: "organization", id: item.id, field: "observation" }} text={item.observation}
+        disabled={busy || observation !== item.observation} />
+      {observation !== item.observation && <small>Guarda tus cambios para destacar la versión editada.</small>}
+    </div>}
+    <div className="review-actions"><Button variant="ghost" className="danger-action" disabled={busy} onClick={() => void remove()}><Trash2 /> Eliminar</Button><Button variant="outline" disabled={busy} onClick={() => void save("pending")}><Save /> {item.approvalStatus === "approved" ? "Retirar publicación" : "Guardar cambios"}</Button><Button disabled={busy || !observation.trim() || (item.approvalStatus === "approved" && observation === item.observation)} onClick={() => void save("approved")}><CheckCircle2 /> Aprobar y publicar</Button></div>
   </article>;
 }
 
-function OrganizationApprovalPanel({ data, monthStart, post, refresh }: { data: PortalData; monthStart: string; post: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>; refresh: () => Promise<void> }) {
-  const items = data.organizationReports.filter((item) => item.monthStart === monthStart).sort((a, b) => Number(a.approvalStatus === "approved") - Number(b.approvalStatus === "approved"));
-  const pending = items.filter((item) => item.approvalStatus === "pending").length;
-  return <section className="panel admin-panel approval-panel"><div className="panel-heading"><div><span className="section-kicker">Revisión previa · {weekLabel(monthStart)}</span><h3>Aprobación de informaciones</h3></div><Badge variant={pending ? "secondary" : "outline"}>{pending} pendientes</Badge></div>{items.length ? <div className="review-grid">{items.map((item) => <OrganizationReviewCard key={item.id} item={item} post={post} refresh={refresh} />)}</div> : <div className="mini-empty">No hay información de organizaciones para revisar este mes.</div>}</section>;
+type ReviewActions = {
+  post: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  refresh: () => Promise<void>;
+};
+
+function CouncilReviewCard({ report, field, published, post, refresh }: ReviewActions & {
+  report: Report; field: CouncilField; published: boolean;
+}) {
+  const [busy, setBusy] = useState(false);
+  const text = report[field];
+  const review = async () => {
+    setBusy(true);
+    try {
+      await post({ action: "review_council_comment", reportId: report.id, field, text, decision: published ? "withdraw" : "publish" });
+      toast.success(published ? "Publicación retirada" : "Comentario aprobado y publicado");
+      await refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No fue posible revisar el comentario.");
+      if ((error as { status?: number }).status === 409) await refresh();
+    } finally { setBusy(false); }
+  };
+  return <article className={`review-card ${published ? "approved" : "pending"}`}>
+    <div className="review-card-heading"><div><span>{report.wardName} · Sumo Consejo</span>
+      <h4>{councilFields[field]}</h4><small>{report.reporterName} · {dateTime(report.updatedAt)}</small></div>
+      <Badge variant={published ? "default" : "secondary"}>{published ? "Publicado" : "Pendiente"}</Badge></div>
+    <p className="review-comment-text">{text}</p>
+    <div className="review-highlight">
+      {report.status === "submitted" && <HighlightButton source={{ type: "high_council", id: report.id, field }} text={text} disabled={busy} />}
+      <Button variant={published ? "outline" : "default"} onClick={() => void review()} disabled={busy}>
+        <CheckCircle2 />{published ? "Retirar publicación" : "Aprobar y publicar"}
+      </Button>
+    </div>
+  </article>;
+}
+
+function ApprovalPanel({ data, monthStart, post, refresh }: ReviewActions & { data: PortalData; monthStart: string }) {
+  const organizations = data.organizationReports.filter((item) => item.monthStart === monthStart)
+    .sort((a, b) => Number(a.approvalStatus === "approved") - Number(b.approvalStatus === "approved"));
+  const published = new Set(data.publishedCouncilComments.filter((item) => item.monthStart === monthStart)
+    .map((item) => `${item.reportId}-${item.field}`));
+  const comments = data.reports.filter((report) => report.weekStart === monthStart).flatMap((report) =>
+    councilFieldKeys.filter((field) => report[field].trim()).map((field) => ({
+      report, field, published: published.has(`${report.id}-${field}`),
+    })).filter((item) => item.published || report.status === "submitted"))
+    .sort((a, b) => Number(a.published) - Number(b.published));
+  return <div className="view-stack">
+    <section className="panel admin-panel approval-panel">
+      <div className="panel-heading"><div><span className="section-kicker">{weekLabel(monthStart)}</span><h3>Comentarios del Sumo Consejo</h3>
+        <p>Aprueba cada comentario por separado para compartirlo con las organizaciones de la estaca y los sumos asignados al barrio.</p></div>
+        <Badge variant="outline">{comments.filter((item) => !item.published).length} pendientes</Badge></div>
+      {comments.length ? <div className="review-grid">{comments.map(({ report, field, published }) =>
+        <CouncilReviewCard key={`${report.id}-${field}`} report={report} field={field} published={published} post={post} refresh={refresh} />)}</div>
+        : <div className="mini-empty">Aún no hay comentarios enviados por el Sumo Consejo para este mes.</div>}
+    </section>
+    <section className="panel admin-panel approval-panel">
+      <div className="panel-heading"><div><span className="section-kicker">{weekLabel(monthStart)}</span><h3>Aportes de organizaciones</h3></div>
+        <Badge variant="outline">{organizations.filter((item) => item.approvalStatus === "pending").length} pendientes</Badge></div>
+      {organizations.length ? <div className="review-grid">{organizations.map((item) =>
+        <OrganizationReviewCard key={`${item.id}-${item.updatedAt}`} item={item} post={post} refresh={refresh} />)}</div>
+        : <div className="mini-empty">Aún no hay aportes de organizaciones para este mes.</div>}
+    </section>
+  </div>;
 }
 
 function AdminView({ data, refresh, post }: { data: PortalData; refresh: () => Promise<void>; post: (payload: Record<string, unknown>) => Promise<Record<string, unknown>> }) {
@@ -1661,7 +1791,7 @@ function AdminView({ data, refresh, post }: { data: PortalData; refresh: () => P
             <div className="dialog-field"><label htmlFor="member-password">{editingMember ? "Nueva contraseña (opcional)" : "Contraseña"}</label><Input id="member-password" type="password" value={memberForm.password} onChange={(event) => setMemberForm((previous) => ({ ...previous, password: event.target.value }))} placeholder={editingMember ? "Dejar en blanco para mantenerla" : "Mínimo 8 caracteres"} /></div>
             <div className="dialog-field"><label>Nivel de acceso</label><Select value={memberForm.role} onValueChange={(role) => setMemberForm((previous) => ({ ...previous, role: role as "admin" | "leader" }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="leader">Usuario informante</SelectItem><SelectItem value="admin">Administración Estaca</SelectItem></SelectContent></Select></div>
             {memberForm.role !== "admin" && <div className="dialog-field"><label>Perfil de informe</label><Select value={memberForm.reportScope} onValueChange={(reportScope) => setMemberForm((previous) => ({ ...previous, reportScope: reportScope as ReportScope }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="high_council">Sumo Consejo asignado</SelectItem><SelectItem value="relief_society">Organización · Sociedad de Socorro</SelectItem><SelectItem value="primary">Organización · Primaria</SelectItem><SelectItem value="young_women">Organización · Mujeres Jóvenes</SelectItem><SelectItem value="young_men">Organización · Hombres Jóvenes</SelectItem><SelectItem value="sunday_school">Organización · Escuela Dominical</SelectItem><SelectItem value="jas">Organización · JAS</SelectItem><SelectItem value="single_adults">Organización · AS</SelectItem><SelectItem value="temple_family_history">Organización · Templo e Historia Familiar</SelectItem><SelectItem value="missionary_work">Organización · Obra Misional</SelectItem><SelectItem value="self_reliance">Organización · Autosuficiencia</SelectItem><SelectItem value="seminary">Organización · Seminario</SelectItem></SelectContent></Select></div>}
-            {memberForm.role !== "admin" && <div className="dialog-field assignment-field"><label>Barrios asignados para consultar información</label>{data.wards.length ? <div className="assignment-list">{data.wards.map((ward) => <label key={ward.id}><Checkbox checked={memberForm.wardIds.includes(ward.id)} onCheckedChange={(checked) => setMemberForm((previous) => ({ ...previous, wardIds: checked ? [...previous.wardIds, ward.id] : previous.wardIds.filter((id) => id !== ward.id) }))} /> {ward.name}</label>)}</div> : <span className="field-help">Primero debes crear al menos un barrio.</span>}</div>}
+            {memberForm.role !== "admin" && <div className="dialog-field assignment-field"><label>{memberForm.reportScope === "high_council" ? "Barrios asignados para informar y consultar" : "Barrios de referencia"}</label>{memberForm.reportScope !== "high_council" && <span className="field-help">Las organizaciones pueden consultar las publicaciones de todos los barrios de la estaca.</span>}{data.wards.length ? <div className="assignment-list">{data.wards.map((ward) => <label key={ward.id}><Checkbox checked={memberForm.wardIds.includes(ward.id)} onCheckedChange={(checked) => setMemberForm((previous) => ({ ...previous, wardIds: checked ? [...previous.wardIds, ward.id] : previous.wardIds.filter((id) => id !== ward.id) }))} /> {ward.name}</label>)}</div> : <span className="field-help">Primero debes crear al menos un barrio.</span>}</div>}
             {editingMember && <label className="active-check"><Checkbox checked={memberForm.active} onCheckedChange={(checked) => setMemberForm((previous) => ({ ...previous, active: checked === true }))} /> Acceso activo</label>}
           </div>
           <DialogFooter><Button variant="outline" onClick={() => setMemberOpen(false)}>Cancelar</Button><Button disabled={submitting} onClick={saveMember}>Guardar acceso</Button></DialogFooter>

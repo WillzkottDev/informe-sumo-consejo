@@ -5,8 +5,8 @@ export const metadata: Metadata = {
   title: "Informes Estaca Ñuñoa",
   description: "Seguimiento mensual de barrios y consolidado de Estaca.",
   icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
+    icon: "/estaca-icono.svg",
+    shortcut: "/estaca-icono.svg",
   },
 };
 

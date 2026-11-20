@@ -1,6 +1,6 @@
-import { asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { members, memberWards, organizationReports, reports, wards } from "@/db/schema";
+import { councilCommentPublications as publications, members, memberWards, organizationReports, reports, wards } from "@/db/schema";
 import {
   canAccessWard,
   hashPassword,
@@ -12,6 +12,8 @@ import {
   requirePortalMember,
   SESSION_COOKIE,
 } from "@/lib/portal-access";
+
+import { councilFieldKeys, councilFields, type CouncilField } from "@/lib/stake-council";
 
 export const dynamic = "force-dynamic";
 
@@ -46,28 +48,17 @@ export async function GET() {
     const member = await requirePortalMember();
     const db = getDb();
 
-    const visibleWards =
-      member.role === "admin" || member.reportScope !== "high_council"
-        ? await db.select().from(wards).where(eq(wards.active, true)).orderBy(asc(wards.name))
-        : await db
-            .select({
-              id: wards.id,
-              name: wards.name,
-              active: wards.active,
-              createdAt: wards.createdAt,
-            })
-            .from(memberWards)
-            .innerJoin(wards, eq(memberWards.wardId, wards.id))
-            .where(eq(memberWards.memberId, member.id))
-            .orderBy(asc(wards.name));
+    const isAdmin = member.role === "admin";
+    const isCouncillor = !isAdmin && member.reportScope === "high_council";
+    const assignmentsForMember = db.select({ wardId: memberWards.wardId }).from(memberWards)
+      .where(eq(memberWards.memberId, member.id));
+    const wardScope = and(eq(wards.active, true), isCouncillor ? inArray(wards.id, assignmentsForMember) : undefined);
+    const visibleWards = await db.select().from(wards).where(wardScope).orderBy(asc(wards.name));
+    const assignedWardIds = isAdmin || isCouncillor
+      ? visibleWards.map((ward) => ward.id)
+      : (await assignmentsForMember).map((row) => row.wardId);
 
-    const wardIds = visibleWards.map((ward) => ward.id);
-    const currentAssignmentRows = member.role === "admin"
-      ? []
-      : await db.select({ wardId: memberWards.wardId }).from(memberWards).where(eq(memberWards.memberId, member.id));
-    const assignedWardIds = currentAssignmentRows.map((row) => row.wardId);
-    const readableWardIds = member.role === "admin" || member.reportScope === "high_council" ? wardIds : [];
-    const reportRows = readableWardIds.length
+    const reportRows = isAdmin || isCouncillor
       ? await db
           .select({
             id: reports.id,
@@ -91,12 +82,10 @@ export async function GET() {
           })
           .from(reports)
           .innerJoin(wards, eq(reports.wardId, wards.id))
-          .where(inArray(reports.wardId, readableWardIds))
+          .where(and(wardScope, isAdmin ? undefined : eq(reports.reporterMemberId, member.id)))
           .orderBy(desc(reports.weekStart), asc(wards.name))
-          .limit(600)
       : [];
-    const organizationRowsRaw = wardIds.length
-      ? await db
+    const organizationRows = await db
           .select({
             id: organizationReports.id,
             wardId: organizationReports.wardId,
@@ -112,15 +101,37 @@ export async function GET() {
           })
           .from(organizationReports)
           .innerJoin(wards, eq(organizationReports.wardId, wards.id))
-          .where(inArray(organizationReports.wardId, wardIds))
-          .orderBy(desc(organizationReports.monthStart), asc(wards.name))
-          .limit(1000)
-      : [];
-    const organizationRows = member.role === "admin"
-      ? organizationRowsRaw
-      : member.reportScope === "high_council"
-        ? organizationRowsRaw.filter((row) => row.approvalStatus === "approved" && assignedWardIds.includes(row.wardId))
-        : organizationRowsRaw.filter((row) => row.organization === member.reportScope && (row.reporterMemberId === member.id || (row.approvalStatus === "approved" && assignedWardIds.includes(row.wardId))));
+          .where(and(wardScope, isAdmin ? undefined : or(
+            eq(organizationReports.approvalStatus, "approved"),
+            isCouncillor ? undefined : and(
+              eq(organizationReports.organization, member.reportScope),
+              eq(organizationReports.reporterMemberId, member.id),
+            ),
+          )))
+          .orderBy(desc(organizationReports.monthStart), asc(wards.name));
+
+    const publishedCouncilComments = await db.select({
+      reportId: publications.reportId, field: publications.field, text: publications.approvedText,
+      wardId: reports.wardId, wardName: wards.name, monthStart: reports.weekStart,
+      reporterName: reports.reporterName, approvedAt: publications.approvedAt,
+    }).from(publications)
+      .innerJoin(reports, eq(publications.reportId, reports.id))
+      .innerJoin(wards, eq(reports.wardId, wards.id))
+      .where(and(wardScope, or(...councilFieldKeys.map((field) =>
+        and(eq(publications.field, field), eq(publications.approvedText, reports[field])),
+      ))))
+      .orderBy(desc(reports.weekStart), asc(wards.name), asc(publications.field));
+
+    // One form per ward and month. Other authors only receive its occupied slot.
+    const occupiedSlots = isAdmin ? [] : isCouncillor
+      ? await db.select({ wardId: reports.wardId, monthStart: reports.weekStart }).from(reports)
+          .innerJoin(wards, eq(reports.wardId, wards.id))
+          .where(and(wardScope, or(ne(reports.reporterMemberId, member.id), isNull(reports.reporterMemberId))))
+      : await db.select({ wardId: organizationReports.wardId, monthStart: organizationReports.monthStart })
+          .from(organizationReports).innerJoin(wards, eq(organizationReports.wardId, wards.id))
+          .where(and(wardScope, eq(organizationReports.organization, member.reportScope),
+            ne(organizationReports.approvalStatus, "approved"),
+            or(ne(organizationReports.reporterMemberId, member.id), isNull(organizationReports.reporterMemberId))));
 
     const memberRows =
       member.role === "admin"
@@ -152,11 +163,13 @@ export async function GET() {
       },
       wards: visibleWards,
       reports: reportRows,
+      publishedCouncilComments,
+      occupiedSlots,
       organizationReports: organizationRows,
       members: memberRows.map((row) => ({ ...row, connected: Boolean(row.connected) })),
       assignments: assignmentRows,
-      currentAssignmentWardIds: member.role === "admin" ? wardIds : assignedWardIds,
-    });
+      currentAssignmentWardIds: assignedWardIds,
+    }, { headers: { "Cache-Control": "private, no-store", "Vary": "Cookie" } });
   } catch (error) {
     return portalErrorResponse(error);
   }
@@ -215,9 +228,6 @@ export async function POST(request: Request) {
       const punctualityState = cleanText(payload.punctualityState, 30);
       const followupState = cleanText(payload.followupState, 30);
       const scheduleState = cleanText(payload.scheduleState, 30);
-      const punctualityNote = "";
-      const followupNote = "";
-      const scheduleNote = "";
 
       if (status === "submitted") {
         if (
@@ -236,28 +246,33 @@ export async function POST(request: Request) {
         status,
         sacramentalObservation: cleanText(payload.sacramentalObservation),
         punctualityState,
-        punctualityNote,
         wardCouncilObservation: cleanText(payload.wardCouncilObservation),
         followupState,
-        followupNote,
         missionaryObservation: cleanText(payload.missionaryObservation),
         otherObservation: cleanText(payload.otherObservation),
         scheduleState,
-        scheduleNote,
         reporterMemberId: member.id,
         reporterName: member.displayName,
         submittedAt: status === "submitted" ? now : null,
         updatedAt: now,
       };
 
-      const [saved] = await db
-        .insert(reports)
-        .values(values)
-        .onConflictDoUpdate({
+      const editableFields = ["sacramentalObservation", "wardCouncilObservation", "missionaryObservation", "otherObservation"] as const;
+      const [[saved]] = await db.batch([
+        db.insert(reports).values(values).onConflictDoUpdate({
           target: [reports.wardId, reports.weekStart],
           set: values,
-        })
-        .returning();
+          setWhere: eq(reports.reporterMemberId, member.id),
+        }).returning(),
+        // Withdraw only changed comments, atomically with the author's save.
+        db.delete(publications).where(and(
+          inArray(publications.reportId, db.select({ id: reports.id }).from(reports).where(and(
+            eq(reports.wardId, wardId), eq(reports.weekStart, weekStart), eq(reports.reporterMemberId, member.id),
+          ))),
+          or(...editableFields.map((field) => and(eq(publications.field, field), ne(publications.approvedText, values[field])))),
+        )),
+      ]);
+      if (!saved) throw new PortalError("Otro informante ya registró el informe de este barrio y mes.", 409);
       return Response.json({ report: saved });
     }
 
@@ -268,9 +283,8 @@ export async function POST(request: Request) {
       const requestedOrganization = cleanText(payload.organization, 30);
       const organization = member.role === "admin" ? requestedOrganization : member.reportScope;
       if (!validOrganizations.has(organization)) throw new PortalError("La organización no es válida.");
-      if (!(await canAccessWard(member, wardId)) && member.role !== "admin" && member.reportScope === "high_council") {
-        throw new PortalError("No tienes acceso a este barrio.", 403);
-      }
+      const [ward] = await db.select({ id: wards.id }).from(wards).where(and(eq(wards.id, wardId), eq(wards.active, true)));
+      if (!ward) throw new PortalError("El barrio ya no está disponible.", 404);
       const now = new Date().toISOString();
       const values = {
         wardId,
@@ -279,15 +293,24 @@ export async function POST(request: Request) {
         observation: cleanText(payload.observation),
         reporterMemberId: member.id,
         reporterName: member.displayName,
-        approvalStatus: member.role === "admin" ? "approved" : "pending",
-        approvedAt: member.role === "admin" ? now : null,
-        approvedByMemberId: member.role === "admin" ? member.id : null,
+        approvalStatus: "pending",
+        approvedAt: null,
+        approvedByMemberId: null,
         updatedAt: now,
       };
       const [saved] = await db.insert(organizationReports).values(values).onConflictDoUpdate({
         target: [organizationReports.wardId, organizationReports.monthStart, organizationReports.organization],
-        set: values,
+        set: {
+          ...values,
+          approvalStatus: sql`CASE WHEN ${organizationReports.observation} = ${values.observation} THEN ${organizationReports.approvalStatus} ELSE 'pending' END`,
+          approvedAt: sql`CASE WHEN ${organizationReports.observation} = ${values.observation} THEN ${organizationReports.approvedAt} END`,
+          approvedByMemberId: sql`CASE WHEN ${organizationReports.observation} = ${values.observation} THEN ${organizationReports.approvedByMemberId} END`,
+        },
+        setWhere: member.role === "admin" ? undefined : or(
+          eq(organizationReports.reporterMemberId, member.id), eq(organizationReports.approvalStatus, "approved"),
+        ),
       }).returning();
+      if (!saved) throw new PortalError("Otro informante de tu organización tiene un aporte pendiente en este barrio y mes.", 409);
       return Response.json({ organizationReport: saved });
     }
 
@@ -296,6 +319,7 @@ export async function POST(request: Request) {
       const reportId = numericId(payload.reportId, "El informe");
       const approvalStatus = payload.approvalStatus === "approved" ? "approved" : "pending";
       const observation = cleanText(payload.observation);
+      if (approvalStatus === "approved" && !observation) throw new PortalError("Escribe un comentario para publicarlo.");
       const now = new Date().toISOString();
       const [saved] = await db.update(organizationReports).set({
         observation,
@@ -303,9 +327,43 @@ export async function POST(request: Request) {
         approvedAt: approvalStatus === "approved" ? now : null,
         approvedByMemberId: approvalStatus === "approved" ? member.id : null,
         updatedAt: now,
-      }).where(eq(organizationReports.id, reportId)).returning();
-      if (!saved) throw new PortalError("El informe ya no existe.", 404);
+      }).where(and(eq(organizationReports.id, reportId),
+        typeof payload.previousObservation === "string" ? eq(organizationReports.observation, payload.previousObservation) : undefined,
+        typeof payload.previousStatus === "string" ? eq(organizationReports.approvalStatus, payload.previousStatus) : undefined,
+      )).returning();
+      if (!saved) throw new PortalError("El aporte cambió o se eliminó. Vuelve a revisar la versión actual.", 409);
       return Response.json({ organizationReport: saved });
+    }
+
+    if (action === "review_council_comment") {
+      requireAdmin(member);
+      const reportId = numericId(payload.reportId, "El informe");
+      if (typeof payload.field !== "string" || !Object.hasOwn(councilFields, payload.field)) {
+        throw new PortalError("La sección del comentario no es válida.");
+      }
+      const field = payload.field as CouncilField;
+      const text = payload.text;
+      if (typeof text !== "string" || !text.trim()) throw new PortalError("El comentario está vacío.");
+      if (payload.decision === "withdraw") {
+        const withdrawn = await db.delete(publications).where(and(
+          eq(publications.reportId, reportId), eq(publications.field, field), eq(publications.approvedText, text),
+        )).returning({ reportId: publications.reportId });
+        if (!withdrawn.length) throw new PortalError("La publicación cambió. Revisa la versión actual.", 409);
+      } else if (payload.decision === "publish") {
+        const published = await db.all(sql`
+          INSERT INTO ${publications} (report_id, field, approved_text, approved_at, approved_by)
+          SELECT ${reports.id}, ${field}, ${reports[field]}, ${new Date().toISOString()}, ${member.id}
+          FROM ${reports}
+          WHERE ${reports.id} = ${reportId} AND ${reports.status} = 'submitted' AND ${reports[field]} = ${text}
+          ON CONFLICT (report_id, field) DO UPDATE SET approved_text = excluded.approved_text,
+            approved_at = excluded.approved_at, approved_by = excluded.approved_by
+          RETURNING report_id
+        `);
+        if (!published.length) throw new PortalError("El informe cambió. Revisa el comentario enviado antes de publicarlo.", 409);
+      } else {
+        throw new PortalError("La decisión de publicación no es válida.");
+      }
+      return Response.json({ ok: true });
     }
 
     if (action === "delete_report") {

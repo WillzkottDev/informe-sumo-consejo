@@ -1,22 +1,20 @@
 @echo off
+setlocal
 cd /d "%~dp0"
-echo ================================================
-echo   INFORME DE ESTACA - BARRIOS Y SEMAFORO MOVIL
-echo ================================================
-echo.
-where py >nul 2>nul
-if %errorlevel% == 0 (
-  py -3 "GENERAR_REEMPLAZO.py"
-) else (
-  python "GENERAR_REEMPLAZO.py"
+set "destino=LISTO_PARA_GITHUB"
+for %%d in (app lib db drizzle public dist) do (
+  robocopy "%%d" "%destino%\%%d" /E /NFL /NDL /NJH /NJS /NP >nul
+  if errorlevel 8 goto :fallo
 )
-if errorlevel 1 (
-  echo.
-  echo No se pudo generar el archivo. Revisa el error de arriba.
-  pause
-  exit /b 1
+for %%f in (portal-client.tsx vite.config.ts wrangler-sumo-consejo.json MAPA-DE-VISTAS.md LEEME.txt CREAR_ARCHIVO_GITHUB.bat) do (
+  copy /y "%%f" "%destino%\%%f" >nul
+  if errorlevel 1 goto :fallo
 )
-echo.
-echo Abriendo carpeta con archivo listo para GitHub...
-explorer "%~dp0LISTO_PARA_GITHUB\app"
+echo Archivos preparados en %destino%. Sigue los pasos de LEEME.txt para aplicar la actualizacion de D1.
+explorer "%~dp0%destino%"
 pause
+exit /b 0
+:fallo
+echo No se pudo completar la copia. Revisa la ubicacion y el espacio disponible.
+pause
+exit /b 1

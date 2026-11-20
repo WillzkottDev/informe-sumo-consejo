@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import type { CouncilField } from "@/lib/stake-council";
 import {
   index,
   integer,
@@ -128,4 +129,59 @@ export const sessions = sqliteTable(
     uniqueIndex("idx_sessions_token_hash").on(table.tokenHash),
     index("idx_sessions_member_id").on(table.memberId),
   ],
+);
+
+export const presidencyMessages = sqliteTable(
+  "presidency_messages",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    authorId: integer("author_id").notNull().references(() => members.id),
+    requestKey: text("request_key").notNull(),
+    authorName: text("author_name").notNull(),
+    scope: text("scope").notNull(),
+    monthStart: text("month_start").notNull(),
+    topic: text("topic", { enum: ["comment", "focus", "request"] }).notNull(),
+    body: text("body").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_presidency_sender_request").on(table.authorId, table.requestKey),
+    index("idx_presidency_month").on(table.monthStart, table.id),
+    index("idx_presidency_sender_month").on(table.authorId, table.monthStart),
+  ],
+);
+
+// A note keeps the selected wording and its origin as they were when highlighted.
+export const councilNotes = sqliteTable(
+  "council_notes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    sourceType: text("source_type", { enum: ["message", "organization", "high_council"] }).notNull(),
+    sourceId: integer("source_id").notNull(),
+    sourceField: text("source_field").notNull(),
+    scope: text("scope").notNull(),
+    authorName: text("author_name").notNull(),
+    wardName: text("ward_name").notNull(),
+    sourceLabel: text("source_label").notNull(),
+    monthStart: text("month_start").notNull(),
+    excerpt: text("excerpt").notNull(),
+    createdBy: integer("created_by").notNull().references(() => members.id),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_council_note_excerpt").on(table.sourceType, table.sourceId, table.sourceField, table.excerpt),
+    index("idx_council_note_month").on(table.monthStart, table.id),
+  ],
+);
+
+export const councilCommentPublications = sqliteTable(
+  "council_comment_publications",
+  {
+    reportId: integer("report_id").notNull().references(() => reports.id, { onDelete: "cascade" }),
+    field: text("field").$type<CouncilField>().notNull(),
+    approvedText: text("approved_text").notNull(),
+    approvedAt: text("approved_at").notNull(),
+    approvedBy: integer("approved_by").notNull().references(() => members.id),
+  },
+  (table) => [primaryKey({ columns: [table.reportId, table.field] })],
 );
