@@ -246,9 +246,15 @@ function initials(name: string) {
 }
 
 async function responseJson(response: Response) {
-  const payload = (await response.json()) as Record<string, unknown>;
+  let payload: Record<string, unknown>;
+  try {
+    payload = (await response.json()) as Record<string, unknown>;
+  } catch (error) {
+    if (response.ok) throw error;
+    payload = {};
+  }
   if (!response.ok) {
-    const error = new Error(String(payload.error ?? "No fue posible continuar.")) as Error & { status?: number };
+    const error = new Error(String(payload.error ?? `No fue posible continuar (HTTP ${response.status}).`)) as Error & { status?: number };
     error.status = response.status;
     throw error;
   }
@@ -272,6 +278,7 @@ export function PortalClient() {
   const editRevision = useRef(0);
   const formScope = useRef("");
   const readRevision = useRef(0);
+  const pendingRead = useRef<AbortController | null>(null);
   const draftWrite = useRef<Promise<unknown>>(Promise.resolve());
   const [mobileNav, setMobileNav] = useState(false);
   const [openedWard, setOpenedWard] = useState<number | null>(null);
@@ -282,13 +289,36 @@ export function PortalClient() {
     [currentWeek],
   );
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (background = false) => {
+    // Polling must not supersede an active read. Explicit refreshes (including
+    // after writes) supersede older reads so a stale snapshot cannot win.
+    if (background && pendingRead.current) return;
     const revision = ++readRevision.current;
+    pendingRead.current?.abort();
+    const controller = new AbortController();
+    pendingRead.current = controller;
     try {
-      setLoadError("");
-      const response = await fetch("/api/portal", { cache: "no-store" });
-      const payload = (await responseJson(response)) as unknown as PortalData;
+      let payload: PortalData | undefined;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const deadline = AbortSignal.timeout(20000);
+        try {
+          const response = await fetch("/api/portal", {
+            cache: "no-store",
+            signal: AbortSignal.any([controller.signal, deadline]),
+          });
+          payload = (await responseJson(response)) as unknown as PortalData;
+          break;
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          const retryable = deadline.aborted || error instanceof TypeError ||
+            (error instanceof Error && [502, 503, 504].includes((error as Error & { status?: number }).status ?? 0));
+          if (!retryable) throw error;
+          if (attempt === 1) throw new Error("No se pudo completar la conexión con el servidor. Intenta actualizar nuevamente.");
+        }
+      }
+      if (!payload) throw new Error("El servidor no devolvió los datos del portal.");
       if (readRevision.current !== revision) return;
+      setLoadError("");
       setData(payload);
       setSelectedWardId((current) =>
         payload.wards.some((ward) => ward.id === current)
@@ -304,21 +334,30 @@ export function PortalClient() {
       if (readRevision.current !== revision) return;
       if (error instanceof Error && (error as Error & { status?: number }).status === 401) {
         setAuthRequired(true);
+        setData(null);
       }
       setLoadError(error instanceof Error ? error.message : "No fue posible cargar el portal.");
     } finally {
-      if (readRevision.current === revision) setLoading(false);
+      if (readRevision.current === revision) {
+        pendingRead.current = null;
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     void refresh();
+    return () => {
+      readRevision.current++;
+      pendingRead.current?.abort();
+      pendingRead.current = null;
+    };
   }, [refresh]);
 
   useEffect(() => {
     if (activeView !== "shared" && activeView !== "history") return;
     const updateReadingView = () => {
-      if (document.visibilityState === "visible") void refresh();
+      if (document.visibilityState === "visible") void refresh(true);
     };
     updateReadingView();
     const timer = window.setInterval(updateReadingView, 30000);
@@ -502,7 +541,7 @@ export function PortalClient() {
 
   if (authRequired) return <LoginScreen busy={authBusy} onLogin={signIn} />;
   if (loading) return <PortalLoading />;
-  if (loadError || !data) {
+  if (!data) {
     return (
       <AccessState
         title="Aún no podemos abrir tu panel"
@@ -642,6 +681,13 @@ export function PortalClient() {
         </header>
 
         <main className="workspace">
+          {loadError && (
+            <div role="status" className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 mb-4">
+              <AlertCircle className="size-4 shrink-0" />
+              <span className="flex-1">No fue posible actualizar. Se muestran los últimos datos cargados. {loadError}</span>
+              <Button variant="outline" size="sm" onClick={() => void refresh()}>Actualizar</Button>
+            </div>
+          )}
           {isAdmin && (
             <TabsContent value="stake">
               <StakeSummary data={data} weekStart={weekStart} onOpenReport={openReport} />

@@ -1,0 +1,40 @@
+CORRECCIÓN DE CONEXIÓN — INFORMES ESTACA ÑUÑOA
+
+Archivos modificados (rutas relativas a la raíz del repositorio):
+  app/portal-client.tsx
+  app/api/portal/route.ts
+
+1. Guarda una copia de los dos archivos originales o crea un commit de respaldo.
+2. Copia los archivos del ZIP de parche sobre las mismas rutas del proyecto actual.
+   No reemplaces el portal-client.tsx que está fuera de app/.
+3. Desde la raíz del proyecto, con las dependencias instaladas, ejecuta:
+   npm run build
+4. Publica utilizando el flujo de despliegue habitual del mismo Worker.
+   Si utilizas Wrangler con el directorio compilado, comprueba primero que
+   dist/server/wrangler.json conserva el binding DB y el ID de tu D1 existente.
+   Luego: npx wrangler deploy --config dist/server/wrangler.json --name informe-sumo-consejo
+   Si GitHub/Cloudflare construye el proyecto automáticamente, sube los dos
+   archivos fuente modificados y comprueba que se ejecute el build.
+5. No ejecutes migraciones ni instrucciones SQL: esta corrección no las necesita.
+6. Recarga con Ctrl+F5. Prueba Consulta de informes e Historial desde dos perfiles.
+
+DIAGNÓSTICO
+En Cloudflare Live Logs, busca portal_response_metrics. Registra solo conteos,
+rol genérico, bytes de JSON sin comprimir y tiempo de preparación de respuesta.
+En Chrome Network > portal > Headers busca X-Portal-Bytes.
+Si vuelve a fallar, guarda los valores de métricas y el estado/timing de Network.
+No compartas cookies, contenidos privados ni el JSON de informes completo.
+
+ALCANCE
+Las lecturas automáticas no reemplazan una lectura en curso. Las lecturas
+explícitas cancelan las anteriores y protegen contra respuestas antiguas.
+Cada intento tiene un límite de 20 s, con un reintento para fallos de conexión,
+timeout o HTTP 502/503/504. Los datos ya cargados se conservan en memoria
+si falla una actualización y se muestra una advertencia. HTTP 401 limpia los
+datos y lleva al acceso. No se reintentan escrituras automáticamente.
+El historial, los filtros y los permisos no se modificaron. El JSON aún
+contiene todo el historial autorizado; se mide antes de decidir una paginación.
+
+VALIDACIÓN
+Sintaxis TypeScript/TSX comprobada mediante transpileModule. No se ejecutó un
+build integral ni se probó contra la base D1 remota. Este ZIP no contiene dist.

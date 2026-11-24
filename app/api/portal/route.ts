@@ -44,6 +44,7 @@ function validateMonth(value: unknown) {
 }
 
 export async function GET() {
+  const startedAt = Date.now();
   try {
     const member = await requirePortalMember();
     const db = getDb();
@@ -152,7 +153,7 @@ export async function GET() {
     const assignmentRows =
       member.role === "admin" ? await db.select().from(memberWards) : [];
 
-    return Response.json({
+    const payload = {
       currentMember: {
         id: member.id,
         email: member.email,
@@ -169,7 +170,25 @@ export async function GET() {
       members: memberRows.map((row) => ({ ...row, connected: Boolean(row.connected) })),
       assignments: assignmentRows,
       currentAssignmentWardIds: assignedWardIds,
-    }, { headers: { "Cache-Control": "private, no-store", "Vary": "Cookie" } });
+    };
+    const body = JSON.stringify(payload);
+    const bytes = new TextEncoder().encode(body).byteLength;
+    // Counts only: never log report text, identities, credentials or cookies.
+    console.info("portal_response_metrics", {
+      role: isAdmin ? "admin" : isCouncillor ? "high_council" : "organization",
+      bytes,
+      reports: reportRows.length,
+      organizationReports: organizationRows.length,
+      publishedCouncilComments: publishedCouncilComments.length,
+      occupiedSlots: occupiedSlots.length,
+      elapsedMs: Date.now() - startedAt,
+    });
+    return new Response(body, { headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "private, no-store",
+      "Vary": "Cookie",
+      "X-Portal-Bytes": String(bytes),
+    } });
   } catch (error) {
     return portalErrorResponse(error);
   }
