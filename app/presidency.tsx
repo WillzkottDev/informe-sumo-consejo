@@ -15,7 +15,7 @@ async function jsonResponse<T>(response: Response): Promise<T> {
   const data = await response.json();
   if (!response.ok) {
     const detail = data && typeof data === "object" && "error" in data ? data.error : null;
-    throw new Error(typeof detail === "string" ? detail : "No se pudo completar la solicitud.");
+    throw Object.assign(new Error(typeof detail === "string" ? detail : "No se pudo completar la solicitud."), { status: response.status });
   }
   return data as T;
 }
@@ -34,27 +34,38 @@ function usePrivateList<T>(view: "messages" | "notes", month: string, enabled: b
   const url = `${endpoint}?view=${view}&month=${encodeURIComponent(month)}`;
   const [state, setState] = useState<{ url: string; rows: T[]; error: string }>({ url: "", rows: [], error: "" });
   const version = useRef(0);
+  const pending = useRef<AbortController | null>(null);
+  const lastAttempt = useRef(0);
   const refresh = useCallback(async () => {
     if (!enabled) return;
     const revision = ++version.current;
+    pending.current?.abort();
+    const controller = new AbortController();
+    pending.current = controller;
+    lastAttempt.current = Date.now();
     try {
-      const { rows } = await jsonResponse<{ rows: T[] }>(await fetch(url, { cache: "no-store" }));
+      const { rows } = await jsonResponse<{ rows: T[] }>(await fetch(url, { cache: "no-store", signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]) }));
       if (revision === version.current) setState({ url, rows, error: "" });
     } catch (error) {
       if (revision === version.current) {
-        setState({ url, rows: [], error: messageOf(error) });
+        const unauthorized = [401, 403].includes((error as { status?: number })?.status ?? 0);
+        setState(previous => ({ url, rows: !unauthorized && previous.url === url ? previous.rows : [], error: messageOf(error) }));
       }
+    } finally {
+      if (pending.current === controller) pending.current = null;
     }
   }, [enabled, url]);
   useEffect(() => {
     if (!enabled) return;
     void refresh();
-    const whenVisible = () => { if (document.visibilityState === "visible") void refresh(); };
+    const whenVisible = () => { if (document.visibilityState === "visible" && !pending.current && Date.now() - lastAttempt.current >= 300000) void refresh(); };
     window.addEventListener("focus", whenVisible);
     document.addEventListener("visibilitychange", whenVisible);
-    const timer = window.setInterval(whenVisible, 30000);
+    const timer = window.setInterval(whenVisible, 300000);
     return () => {
       version.current++;
+      pending.current?.abort();
+      pending.current = null;
       window.clearInterval(timer);
       window.removeEventListener("focus", whenVisible);
       document.removeEventListener("visibilitychange", whenVisible);

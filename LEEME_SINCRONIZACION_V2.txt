@@ -1,0 +1,28 @@
+ESTACA ÑUÑOA — SINCRONIZACIÓN V2
+
+Aplicar sobre el proyecto que ya tiene la corrección anterior.
+Archivos modificados: app/portal-client.tsx y app/presidency.tsx.
+El parche también incluye app/api/portal/route.ts de la corrección anterior,
+para conservar las métricas portal_response_metrics y X-Portal-Bytes.
+
+1. Respaldar o crear un commit antes de reemplazar los archivos.
+2. Extraer el parche en la raíz del repositorio, conservando las rutas app/.
+3. Compilar con npm run build (dependencias instaladas). Desplegar con el flujo habitual.
+4. Si despliega mediante Wrangler: comprobar que dist/server/wrangler.json
+   conserva el binding DB y el ID D1 actual antes de publicar.
+5. Recargar con Ctrl+F5. Comprobar acceso, consultas, historial, guardar,
+   publicar, mensajes, notas, y el botón Actualizar en escritorio y móvil.
+
+Cambios: polling de 5 minutos en vistas de lectura, solamente si la pestaña
+está visible y han pasado 5 minutos desde el último intento; lectura inicial,
+actualización tras guardar/publicar y manual siguen disponibles. Indicador de
+última sincronización del portal principal. Lecturas de portal con máximo de
+3 intentos, 20 segundos por intento y pausas de 1 y 2 segundos para fallos
+transitorios. Las escrituras no se reintentan automáticamente. Conservación de
+últimos datos en memoria frente a fallos transitorios; 401/403 no conservan
+los datos. Mensajes y notas mantienen su actualización propia, con polling de
+5 minutos, cancelación de lecturas anteriores y timeout de 20 segundos.
+El botón general Actualizar consulta /api/portal, no /api/presidencia.
+
+No se requieren migraciones, cambios SQL ni una nueva base D1.
+Validación: sintaxis TypeScript/TSX comprobada, no build integral ni prueba remota.

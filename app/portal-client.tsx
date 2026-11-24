@@ -20,6 +20,7 @@ import {
   Mail,
   NotebookPen,
   LogOut,
+  RefreshCw,
   Menu,
   Plus,
   Save,
@@ -268,6 +269,9 @@ export function PortalClient() {
   const [data, setData] = useState<PortalData | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState<number | null>(null);
+  const lastAttempt = useRef(0);
   const [authRequired, setAuthRequired] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
   const [selectedWardId, setSelectedWardId] = useState(0);
@@ -297,9 +301,11 @@ export function PortalClient() {
     pendingRead.current?.abort();
     const controller = new AbortController();
     pendingRead.current = controller;
+    lastAttempt.current = Date.now();
+    setSyncing(true);
     try {
       let payload: PortalData | undefined;
-      for (let attempt = 0; attempt < 2; attempt++) {
+      for (let attempt = 0; attempt < 3; attempt++) {
         const deadline = AbortSignal.timeout(20000);
         try {
           const response = await fetch("/api/portal", {
@@ -313,13 +319,26 @@ export function PortalClient() {
           const retryable = deadline.aborted || error instanceof TypeError ||
             (error instanceof Error && [502, 503, 504].includes((error as Error & { status?: number }).status ?? 0));
           if (!retryable) throw error;
-          if (attempt === 1) throw new Error("No se pudo completar la conexión con el servidor. Intenta actualizar nuevamente.");
+          if (attempt === 2) throw new Error("No se pudo completar la conexión con el servidor. Intenta actualizar nuevamente.");
+          // Backoff only for reads; never retry a mutation automatically.
+          await new Promise<void>((resolve) => {
+            const finish = () => {
+              window.clearTimeout(timer);
+              controller.signal.removeEventListener("abort", finish);
+              resolve();
+            };
+            const timer = window.setTimeout(finish, 1000 * 2 ** attempt);
+            controller.signal.addEventListener("abort", finish, { once: true });
+            if (controller.signal.aborted) finish();
+          });
+          if (controller.signal.aborted) return;
         }
       }
       if (!payload) throw new Error("El servidor no devolvió los datos del portal.");
       if (readRevision.current !== revision) return;
       setLoadError("");
       setData(payload);
+      setLastSync(Date.now());
       setSelectedWardId((current) =>
         payload.wards.some((ward) => ward.id === current)
           ? current
@@ -335,12 +354,17 @@ export function PortalClient() {
       if (error instanceof Error && (error as Error & { status?: number }).status === 401) {
         setAuthRequired(true);
         setData(null);
+        setLastSync(null);
+      } else if (error instanceof Error && (error as Error & { status?: number }).status === 403) {
+        setData(null);
+        setLastSync(null);
       }
       setLoadError(error instanceof Error ? error.message : "No fue posible cargar el portal.");
     } finally {
       if (readRevision.current === revision) {
         pendingRead.current = null;
         setLoading(false);
+        setSyncing(false);
       }
     }
   }, []);
@@ -354,19 +378,20 @@ export function PortalClient() {
     };
   }, [refresh]);
 
+  const hasData = data !== null;
   useEffect(() => {
-    if (activeView !== "shared" && activeView !== "history") return;
+    if (!hasData || !["shared", "history", "stake", "approvals"].includes(activeView)) return;
     const updateReadingView = () => {
-      if (document.visibilityState === "visible") void refresh(true);
+      if (document.visibilityState === "visible" && Date.now() - lastAttempt.current >= 300000) void refresh(true);
     };
     updateReadingView();
-    const timer = window.setInterval(updateReadingView, 30000);
+    const timer = window.setInterval(updateReadingView, 300000);
     document.addEventListener("visibilitychange", updateReadingView);
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", updateReadingView);
     };
-  }, [activeView, refresh]);
+  }, [activeView, refresh, hasData]);
 
   useEffect(() => {
     if (!data) return;
@@ -431,6 +456,7 @@ export function PortalClient() {
         if (editRevision.current === revision) {
           reportEdited.current = false;
           setAutoSaveState("saved");
+          void refresh();
         }
       } catch (error) {
         setAutoSaveState("idle");
@@ -438,7 +464,7 @@ export function PortalClient() {
       }
     }, 900);
     return () => window.clearTimeout(timer);
-  }, [data, form, post, selectedWardId, weekStart]);
+  }, [data, form, post, selectedWardId, weekStart, refresh]);
 
   const signIn = async (username: string, password: string) => {
     setAuthBusy(true);
@@ -681,11 +707,20 @@ export function PortalClient() {
         </header>
 
         <main className="workspace">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-white px-3 py-2 text-sm">
+            <div role="status" className="flex min-w-0 flex-wrap items-center gap-2 text-slate-600">
+              {loadError ? <AlertCircle className="size-4 text-amber-600" /> : <Clock3 className="size-4" />}
+              <span>{syncing ? "Sincronizando…" : loadError ? "Datos pendientes de actualizar" : "Información sincronizada"}</span>
+              {lastSync !== null && <span className="text-xs">· Última sincronización: {new Date(lastSync).toLocaleString("es-CL")}</span>}
+            </div>
+            <Button variant="outline" size="sm" disabled={syncing} onClick={() => void refresh()}>
+              <RefreshCw className={`size-4 ${syncing ? "animate-spin" : ""}`} /> Actualizar
+            </Button>
+          </div>
           {loadError && (
             <div role="status" className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 mb-4">
               <AlertCircle className="size-4 shrink-0" />
               <span className="flex-1">No fue posible actualizar. Se muestran los últimos datos cargados. {loadError}</span>
-              <Button variant="outline" size="sm" onClick={() => void refresh()}>Actualizar</Button>
             </div>
           )}
           {isAdmin && (
